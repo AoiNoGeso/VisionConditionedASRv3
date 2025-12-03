@@ -1,0 +1,13 @@
+torch
+torchaudio
+transformers
+numpy
+tqdm
+wandb
+safetensors
+audiomentations
+Pillow
+pyctcdecode
+torchcodec
+jiwer
+librosa
