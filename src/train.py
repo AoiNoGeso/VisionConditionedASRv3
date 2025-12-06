@@ -11,61 +11,79 @@ from tqdm import tqdm
 import wandb
 from safetensors.torch import save_file, load_file
 import librosa
+import sys
 
-from model import VisionConditionedASR
+# model_v3.pyから VisionConditionedASRv3 をインポート
+# 実際のパスに応じて調整してください
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from model_v3 import VisionConditionedASRv3
+
+# 既存のdataloader.pyを使用
 from dataloader import create_dataloader
 
 
 @dataclass
 class TrainingConfig:
+    """VisionConditionedASRv3 学習設定"""
+    # データセットパス
     train_json: str = "../../Datasets/SpokenCOCO/SpokenCOCO_train_fixed.json"
     val_json: str = "../../Datasets/SpokenCOCO/SpokenCOCO_val_fixed.json"
     audio_dir: str = "../../Datasets/SpokenCOCO"
     image_dir: str = "../../Datasets/stair_captions/images"
     
-    vocab_size: Optional[int] = None
-    num_heads: int = 8
+    # モデル設定
+    vocab_size: Optional[int] = None  # Noneの場合は32
+    visual_tokens: int = 64  # Visual Tokensの数
     dropout: float = 0.1
+    use_visual_pos_embed: bool = True  # Visual位置埋め込み
     
+    # 学習設定
     batch_size: int = 16
     num_epochs: int = 20
     learning_rate: float = 1e-5
     weight_decay: float = 1e-5
     gradient_clip: float = 1.0
     
+    # データローダー設定
     num_workers: int = 8
     max_audio_length: float = 10.0
     validate_files: bool = True
     
-    freeze_audio_encoder: bool = False
-    freeze_vision_encoder: bool = True
-    freeze_cross_attention: bool = False
-
+    # レイヤーfreeze設定
+    freeze_vision_encoder: bool = True  # DINOv2をfreeze
+    freeze_audio_cnn: bool = True  # Wav2Vec2 CNNをfreeze (常にTrue)
+    freeze_transformer_encoder: bool = False  # Transformer Encoderを学習
+    audio_trainable_layers: int = 0  # Transformerの上位N層のみ学習（0=全層学習）
+    
     # ノイズ設定（統一仕様）
-    noise_type: str = "babble"  # "none", "white", "pink", "babble"
+    noise_type: str = "none"  # "none", "white", "pink", "babble"
     snr_db: float = 10.0  # 全ノイズタイプ共通のSNR（dB）
     noise_prob: float = 0.5  # ノイズを付加する確率 (0.0-1.0)
-    babble_path: str = "../../Datasets/NOISEX92/babble/signal.wav"  # babbleノイズのパス
+    babble_path: str = "../../Datasets/NOISEX92/babble/signal.wav"
     
-    warmup_steps: int = 1000
-    use_amp: bool = True  # Automatic Mixed Precision
-    amp_dtype: str = "float16"  # "float16" or "bfloat16"
+    # Mixed Precision
+    use_amp: bool = True
+    amp_dtype: str = "bfloat16"  # "float16" or "bfloat16"
     
-    checkpoint_dir: str = "../../Models/DINOv2_model/babble"
+    # チェックポイント
+    checkpoint_dir: str = "../../Models/VisionConditionedASRv3"
     save_epoch: int = 1
-    resume_from: Optional[str] = "../../Models/DINOv2_model/babble/epoch_4"#checkpoints/DINOv2_model/epoch_12"
-    device: str = "cuda:1"  # "cuda:0", "cuda:1", "cpu"
+    resume_from: Optional[str] = None
     
+    # デバイス
+    device: str = "cuda:0"
+    
+    # ログ設定
     log_step: int = 100
     validate_epoch: int = 1
-    use_wandb: bool = True
-    wandb_project: str = "VisionConditionedASRv2"
+    use_wandb: bool = False
+    wandb_project: str = "VisionConditionedASRv3"
 
 
 class NoiseAugmenter:
     """
     独自実装のノイズ付加クラス（dB単位でSNR制御、確率的付加）
-    test.py準拠の実装
+    train.py準拠の実装
     """
     def __init__(
         self,
@@ -98,7 +116,6 @@ class NoiseAugmenter:
             print(f"  Babble Noise")
             print(f"  Loading: {babble_path}")
             
-            # librosaで読み込み、16000Hzにリサンプリング
             self.babble_audio, sr = librosa.load(babble_path, sr=self.sample_rate, mono=True)
             self.babble_audio = self.babble_audio.astype(np.float32)
             print(f"  Loaded: {len(self.babble_audio)} samples ({len(self.babble_audio)/self.sample_rate:.2f}s)")
@@ -106,101 +123,58 @@ class NoiseAugmenter:
             raise ValueError(f"Unknown noise_type: {noise_type}")
     
     def _compute_rms(self, audio: np.ndarray) -> float:
-        """RMS (Root Mean Square) を計算"""
         return np.sqrt(np.mean(audio ** 2))
     
     def _adjust_noise_level(self, signal: np.ndarray, noise: np.ndarray, snr_db: float) -> np.ndarray:
-        """
-        SNR(dB)に基づいてノイズレベルを調整
-        
-        SNR(dB) = 10 * log10(signal_power / noise_power)
-        noise_power = signal_power / (10 ^ (SNR/10))
-        """
         signal_rms = self._compute_rms(signal)
         noise_rms = self._compute_rms(noise)
         
         if noise_rms == 0:
             return noise
         
-        # 目標ノイズRMSを計算
         snr_linear = 10 ** (snr_db / 10.0)
         target_noise_rms = signal_rms / np.sqrt(snr_linear)
-        
-        # ノイズをスケーリング
         noise_scaled = noise * (target_noise_rms / noise_rms)
         
         return noise_scaled
     
     def _generate_white_noise(self, length: int) -> np.ndarray:
-        """ホワイトノイズを生成"""
         return np.random.randn(length).astype(np.float32)
     
     def _generate_pink_noise(self, length: int) -> np.ndarray:
-        """
-        ピンクノイズを生成（1/f特性）
-        FFTを使用して周波数領域で生成
-        """
-        # ホワイトノイズから開始
         white = np.random.randn(length)
-        
-        # FFT
         fft = np.fft.rfft(white)
-        
-        # 周波数ビン（0は除外）
         freqs = np.arange(len(fft))
-        freqs[0] = 1  # ゼロ除算回避
-        
-        # 1/f特性を適用
+        freqs[0] = 1
         fft = fft / np.sqrt(freqs)
-        
-        # 逆FFT
         pink = np.fft.irfft(fft, n=length)
-        
-        # 正規化
         pink = pink / np.max(np.abs(pink))
-        
         return pink.astype(np.float32)
     
     def _get_babble_noise(self, target_length: int) -> np.ndarray:
-        """babbleノイズを取得（ランダムな位置から切り出し）"""
         if self.babble_audio is None:
             raise ValueError("Babble audio not loaded")
         
         noise = self.babble_audio
         
-        # 長さ調整
         if len(noise) < target_length:
-            # 短い場合は繰り返し
             num_repeats = int(np.ceil(target_length / len(noise)))
             noise = np.tile(noise, num_repeats)[:target_length]
         else:
-            # 長い場合はランダムな位置から切り出し
             start_idx = np.random.randint(0, len(noise) - target_length + 1)
             noise = noise[start_idx:start_idx + target_length]
         
         return noise.astype(np.float32)
     
     def apply(self, audio: np.ndarray) -> np.ndarray:
-        """
-        音声にノイズを付加（確率的）
-        
-        Args:
-            audio: 入力音声 (np.ndarray)
-        
-        Returns:
-            noisy_audio or clean_audio: ノイズ付加後の音声またはクリーン音声
-        """
-        # 確率的にノイズ付加をスキップ
         if self.noise_type == "none" or np.random.random() > self.noise_prob:
             return audio
         
-        # float32に変換
         if audio.dtype != np.float32:
             audio = audio.astype(np.float32)
         
         length = len(audio)
         
-        # ノイズ生成
         if self.noise_type == "white":
             noise = self._generate_white_noise(length)
         elif self.noise_type == "pink":
@@ -210,13 +184,9 @@ class NoiseAugmenter:
         else:
             return audio
         
-        # SNRに基づいてノイズレベルを調整
         noise_adjusted = self._adjust_noise_level(audio, noise, self.snr_db)
-        
-        # ノイズを加算
         noisy_audio = audio + noise_adjusted
         
-        # クリッピング防止（-1.0 ~ 1.0の範囲に収める）
         max_val = np.max(np.abs(noisy_audio))
         if max_val > 1.0:
             noisy_audio = noisy_audio / max_val
@@ -224,34 +194,58 @@ class NoiseAugmenter:
         return noisy_audio
 
 
-def freeze_layers(model: VisionConditionedASR, config: TrainingConfig):
+def freeze_layers(model: VisionConditionedASRv3, config: TrainingConfig):
+    """レイヤーのfreeze設定"""
     print("\n" + "="*60)
     print("Layer Freeze Configuration")
     print("="*60)
     
-    if config.freeze_audio_encoder:
-        for param in model.audio_encoder.model.parameters():
-            param.requires_grad = False
-        print("✓ Audio Encoder:    FROZEN")
-    else:
-        print("✓ Audio Encoder:    Trainable")
-    
+    # Vision Encoder
     if config.freeze_vision_encoder:
         for param in model.vision_encoder.model.parameters():
             param.requires_grad = False
-        print("✓ Vision Encoder:   FROZEN")
+        print("✓ Vision Encoder (DINOv2):  FROZEN")
     else:
-        print("✓ Vision Encoder:   Trainable")
+        print("✓ Vision Encoder (DINOv2):  Trainable")
     
-    if config.freeze_cross_attention:
-        for param in model.cross_attention.parameters():
+    # Vision Adapter（常に学習可能）
+    print("✓ Visual Adapter:           Trainable")
+    
+    # Audio Encoder CNN（常にfreeze）
+    for param in model.audio_encoder.feature_extractor.parameters():
+        param.requires_grad = False
+    print("✓ Audio Encoder (CNN):      FROZEN")
+    
+    # Audio Encoder Projection（常に学習可能）
+    print("✓ Audio Encoder (Proj):     Trainable")
+    
+    # Transformer Encoder
+    if config.freeze_transformer_encoder:
+        for param in model.encoder.parameters():
             param.requires_grad = False
-        print("✓ Cross Attention:  FROZEN")
+        print("✓ Transformer Encoder:      FROZEN")
+    elif config.audio_trainable_layers > 0:
+        # 上位N層のみ学習可能
+        total_layers = len(model.encoder.layers)
+        frozen_layers = total_layers - config.audio_trainable_layers
+        
+        for i, layer in enumerate(model.encoder.layers):
+            if i < frozen_layers:
+                for param in layer.parameters():
+                    param.requires_grad = False
+            else:
+                for param in layer.parameters():
+                    param.requires_grad = True
+        
+        print(f"✓ Transformer Encoder:      Last {config.audio_trainable_layers} layers trainable")
+        print(f"                            First {frozen_layers} layers frozen")
     else:
-        print("✓ Cross Attention:  Trainable")
+        print("✓ Transformer Encoder:      Trainable (all layers)")
     
-    print("✓ Classifier:       Trainable")
+    # Classifier（常に学習可能）
+    print("✓ Classifier:               Trainable")
     
+    # パラメータ統計
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total = sum(p.numel() for p in model.parameters())
     
@@ -267,6 +261,7 @@ def decode_predictions(
     tokenizer,
     blank_token_id: int = 0
 ) -> List[str]:
+    """CTCの予測結果をテキストにデコード"""
     decoded_texts = []
     for pred_ids_seq in predicted_ids:
         pred_tokens = []
@@ -288,6 +283,7 @@ def compute_ctc_loss(
     tokenizer,
     wav_lengths: torch.Tensor
 ) -> torch.Tensor:
+    """CTC損失を計算"""
     batch_size = logits.size(0)
     device = logits.device
     
@@ -315,7 +311,7 @@ def compute_ctc_loss(
 
 
 def train_one_epoch(
-    model: VisionConditionedASR,
+    model: VisionConditionedASRv3,
     noise_augmenter: NoiseAugmenter,
     dataloader: DataLoader,
     optimizer: torch.optim.Optimizer,
@@ -325,6 +321,7 @@ def train_one_epoch(
     epoch: int,
     config: TrainingConfig
 ):
+    """1エポック分の学習"""
     model.train()
     total_loss = 0.0
     num_batches = len(dataloader)
@@ -335,6 +332,7 @@ def train_one_epoch(
     
     for batch_idx, batch in enumerate(pbar):
         try:
+            # ノイズ増強
             if noise_augmenter.noise_type != "none":
                 batch["wav"] = [noise_augmenter.apply(wav) for wav in batch["wav"]]
 
@@ -387,7 +385,7 @@ def train_one_epoch(
 
 
 def validate(
-    model: VisionConditionedASR,
+    model: VisionConditionedASRv3,
     noise_augmenter: NoiseAugmenter,
     dataloader: DataLoader,
     tokenizer,
@@ -396,6 +394,7 @@ def validate(
     config: TrainingConfig,
     num_examples: int = 3
 ):
+    """検証"""
     model.eval()
     total_loss = 0.0
     num_batches = 0
@@ -457,7 +456,7 @@ def validate(
 
 
 def save_checkpoint(
-    model: VisionConditionedASR,
+    model: VisionConditionedASRv3,
     optimizer: torch.optim.Optimizer,
     scaler: GradScaler,
     epoch: int,
@@ -465,6 +464,7 @@ def save_checkpoint(
     val_loss: float,
     config: TrainingConfig
 ):
+    """チェックポイントを保存"""
     epoch_dir = os.path.join(config.checkpoint_dir, f"epoch_{epoch+1}")
     os.makedirs(epoch_dir, exist_ok=True)
     
@@ -486,11 +486,12 @@ def save_checkpoint(
 
 def load_checkpoint(
     checkpoint_dir: str,
-    model: VisionConditionedASR,
+    model: VisionConditionedASRv3,
     optimizer: torch.optim.Optimizer,
     scaler: GradScaler,
     device: torch.device
 ):
+    """チェックポイントから学習を再開"""
     if not os.path.exists(checkpoint_dir):
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_dir}")
     
@@ -515,6 +516,7 @@ def load_checkpoint(
 
 
 def main():
+    """メイン学習関数"""
     config = TrainingConfig()
     
     if config.use_wandb:
@@ -522,21 +524,26 @@ def main():
     
     device = torch.device(config.device if torch.cuda.is_available() else "cpu")
     print(f"\n{'='*60}\nDevice: {device} | Batch: {config.batch_size} | LR: {config.learning_rate} | "
-          f"Epochs: {config.num_epochs} | Noise: {config.noise_type} | SNR: {config.snr_db}dB | "
+          f"Epochs: {config.num_epochs}\nVisual Tokens: {config.visual_tokens} | "
+          f"Noise: {config.noise_type} | SNR: {config.snr_db}dB | "
           f"Noise Prob: {config.noise_prob*100:.1f}% | AMP: {config.use_amp}\n{'='*60}\n")
     
     tokenizer = AutoTokenizer.from_pretrained("facebook/wav2vec2-base-960h")
     
-    model = VisionConditionedASR(
+    # モデル初期化
+    model = VisionConditionedASRv3(
         vocab_size=config.vocab_size,
-        num_heads=config.num_heads,
+        visual_tokens=config.visual_tokens,
         dropout=config.dropout,
+        use_visual_pos_embed=config.use_visual_pos_embed,
+        freeze_vision_encoder=config.freeze_vision_encoder,
         device=device
     ).to(device)
     
     freeze_layers(model, config)
     scaler = GradScaler(enabled=config.use_amp)
     
+    # DataLoader作成
     train_loader = create_dataloader(
         json_path=config.train_json,
         audio_dir=config.audio_dir,
@@ -559,12 +566,14 @@ def main():
         validate_files=config.validate_files
     )
     
+    # Optimizer
     optimizer = torch.optim.AdamW(
         filter(lambda p: p.requires_grad, model.parameters()),
         lr=config.learning_rate,
         weight_decay=config.weight_decay
     )
 
+    # Noise Augmenter
     noise_augmenter = NoiseAugmenter(
         noise_type=config.noise_type,
         snr_db=config.snr_db,
