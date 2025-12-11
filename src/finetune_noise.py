@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch.amp import autocast, GradScaler
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, Wav2Vec2Processor, Wav2Vec2ForCTC
 import os
 from dataclasses import dataclass
 from typing import Optional, List
@@ -11,15 +11,13 @@ from tqdm import tqdm
 import wandb
 from safetensors.torch import save_file, load_file
 import librosa
-import sys
 
-from model import VisionConditionedASRv3
 from dataloader import create_dataloader
 
 
 @dataclass
 class TrainingConfig:
-    """VisionConditionedASRv3 学習設定"""
+    """学習設定"""
     # データセットパス
     train_json: str = "../../Datasets/SpokenCOCO/SpokenCOCO_train_fixed.json"
     val_json: str = "../../Datasets/SpokenCOCO/SpokenCOCO_val_fixed.json"
@@ -27,10 +25,8 @@ class TrainingConfig:
     image_dir: str = "../../Datasets/stair_captions/images"
     
     # モデル設定
-    vocab_size: Optional[int] = None  # Noneの場合は32
-    visual_tokens: int = 64  # Visual Tokensの数
-    dropout: float = 0.1
-    use_visual_pos_embed: bool = True  # Visual位置埋め込み
+    model_name: str = "facebook/wav2vec2-base-960h"
+    vocab_size: Optional[int] = None  # Noneの場合はモデルのデフォルト値を使用
     
     # 学習設定
     batch_size: int = 20
@@ -38,47 +34,45 @@ class TrainingConfig:
     learning_rate: float = 1e-5
     weight_decay: float = 1e-5
     gradient_clip: float = 1.0
+    warmup_steps: int = 1000
     
     # データローダー設定
-    num_workers: int = 8
+    num_workers: int = 4
     max_audio_length: float = 10.0
     validate_files: bool = True
     
     # レイヤーfreeze設定
-    freeze_vision_encoder: bool = True  # DINOv2をfreeze
-    freeze_audio_cnn: bool = True  # Wav2Vec2 CNNをfreeze (常にTrue)
-    freeze_transformer_encoder: bool = False  # Transformer Encoderを学習
-    audio_trainable_layers: int = 0  # Transformerの上位N層のみ学習（0=全層学習）
+    freeze_feature_encoder: bool = True  # CNNベースの特徴抽出器をfreeze
     
-    # ノイズ設定（統一仕様）
+    # ノイズ設定（train.py準拠）
     noise_type: str = "none"  # "none", "white", "pink", "babble"
     snr_db: float = 10.0  # 全ノイズタイプ共通のSNR（dB）
     noise_prob: float = 0.5  # ノイズを付加する確率 (0.0-1.0)
-    babble_path: str = "../../Datasets/NOISEX92/babble/signal.wav"
+    babble_path: str = "../../Datasets/NOISEX92/babble/signal.wav"  # babbleノイズのパス
     
-    # Mixed Precision
+    # 半精度学習設定
     use_amp: bool = True
-    amp_dtype: str = "bfloat16"  # "float16" or "bfloat16"
+    amp_dtype: str = "float16"  # "float16" or "bfloat16"
     
-    # チェックポイント
-    checkpoint_dir: str = "../../Models/VisionConditionedASRv3"
+    # 保存設定
+    checkpoint_dir: str = "../../Models/wav2vec2-finetune/clear"
     save_epoch: int = 1
-    resume_from: Optional[str] = None
+    resume_from: Optional[str] = "../../Models/wav2vec2-finetune/clear/epoch_9"  # チェックポイントから再開する場合のパス
     
-    # デバイス
+    # デバイス設定
     device: str = "cuda:1"
     
     # ログ設定
-    log_step: int = 100
-    validate_epoch: int = 1
+    log_step: int = 50
+    validate_epoch: int = 5
     use_wandb: bool = True
-    wandb_project: str = "VisionConditionedASRv3"
+    wandb_project: str = "Wav2Vec2-Finetune-clean"
 
 
 class NoiseAugmenter:
     """
     独自実装のノイズ付加クラス（dB単位でSNR制御、確率的付加）
-    train.py準拠の実装
+    train.py準拠の実装（audiomentations不使用）
     """
     def __init__(
         self,
@@ -111,6 +105,7 @@ class NoiseAugmenter:
             print(f"  Babble Noise")
             print(f"  Loading: {babble_path}")
             
+            # librosaで読み込み、16000Hzにリサンプリング
             self.babble_audio, sr = librosa.load(babble_path, sr=self.sample_rate, mono=True)
             self.babble_audio = self.babble_audio.astype(np.float32)
             print(f"  Loaded: {len(self.babble_audio)} samples ({len(self.babble_audio)/self.sample_rate:.2f}s)")
@@ -118,58 +113,101 @@ class NoiseAugmenter:
             raise ValueError(f"Unknown noise_type: {noise_type}")
     
     def _compute_rms(self, audio: np.ndarray) -> float:
+        """RMS (Root Mean Square) を計算"""
         return np.sqrt(np.mean(audio ** 2))
     
     def _adjust_noise_level(self, signal: np.ndarray, noise: np.ndarray, snr_db: float) -> np.ndarray:
+        """
+        SNR(dB)に基づいてノイズレベルを調整
+        
+        SNR(dB) = 10 * log10(signal_power / noise_power)
+        noise_power = signal_power / (10 ^ (SNR/10))
+        """
         signal_rms = self._compute_rms(signal)
         noise_rms = self._compute_rms(noise)
         
         if noise_rms == 0:
             return noise
         
+        # 目標ノイズRMSを計算
         snr_linear = 10 ** (snr_db / 10.0)
         target_noise_rms = signal_rms / np.sqrt(snr_linear)
+        
+        # ノイズをスケーリング
         noise_scaled = noise * (target_noise_rms / noise_rms)
         
         return noise_scaled
     
     def _generate_white_noise(self, length: int) -> np.ndarray:
+        """ホワイトノイズを生成"""
         return np.random.randn(length).astype(np.float32)
     
     def _generate_pink_noise(self, length: int) -> np.ndarray:
+        """
+        ピンクノイズを生成（1/f特性）
+        FFTを使用して周波数領域で生成
+        """
+        # ホワイトノイズから開始
         white = np.random.randn(length)
+        
+        # FFT
         fft = np.fft.rfft(white)
+        
+        # 周波数ビン（0は除外）
         freqs = np.arange(len(fft))
-        freqs[0] = 1
+        freqs[0] = 1  # ゼロ除算回避
+        
+        # 1/f特性を適用
         fft = fft / np.sqrt(freqs)
+        
+        # 逆FFT
         pink = np.fft.irfft(fft, n=length)
+        
+        # 正規化
         pink = pink / np.max(np.abs(pink))
+        
         return pink.astype(np.float32)
     
     def _get_babble_noise(self, target_length: int) -> np.ndarray:
+        """babbleノイズを取得（ランダムな位置から切り出し）"""
         if self.babble_audio is None:
             raise ValueError("Babble audio not loaded")
         
         noise = self.babble_audio
         
+        # 長さ調整
         if len(noise) < target_length:
+            # 短い場合は繰り返し
             num_repeats = int(np.ceil(target_length / len(noise)))
             noise = np.tile(noise, num_repeats)[:target_length]
         else:
+            # 長い場合はランダムな位置から切り出し
             start_idx = np.random.randint(0, len(noise) - target_length + 1)
             noise = noise[start_idx:start_idx + target_length]
         
         return noise.astype(np.float32)
     
     def apply(self, audio: np.ndarray) -> np.ndarray:
+        """
+        音声にノイズを付加（確率的）
+        
+        Args:
+            audio: 入力音声 (np.ndarray)
+        
+        Returns:
+            noisy_audio or clean_audio: ノイズ付加後の音声またはクリーン音声
+        """
+        # 確率的にノイズ付加をスキップ
         if self.noise_type == "none" or np.random.random() > self.noise_prob:
             return audio
         
+        # float32に変換
         if audio.dtype != np.float32:
             audio = audio.astype(np.float32)
         
         length = len(audio)
         
+        # ノイズ生成
         if self.noise_type == "white":
             noise = self._generate_white_noise(length)
         elif self.noise_type == "pink":
@@ -179,9 +217,13 @@ class NoiseAugmenter:
         else:
             return audio
         
+        # SNRに基づいてノイズレベルを調整
         noise_adjusted = self._adjust_noise_level(audio, noise, self.snr_db)
+        
+        # ノイズを加算
         noisy_audio = audio + noise_adjusted
         
+        # クリッピング防止（-1.0 ~ 1.0の範囲に収める）
         max_val = np.max(np.abs(noisy_audio))
         if max_val > 1.0:
             noisy_audio = noisy_audio / max_val
@@ -189,58 +231,102 @@ class NoiseAugmenter:
         return noisy_audio
 
 
-def freeze_layers(model: VisionConditionedASRv3, config: TrainingConfig):
+class PureWav2Vec2ASR(nn.Module):
+    """
+    純粋なWav2Vec2ベースのASRモデル（ファインチューニング用）
+    """
+    
+    def __init__(self, model_name="facebook/wav2vec2-base-960h", device=None):
+        super().__init__()
+        self.model_name = model_name
+        self.processor = Wav2Vec2Processor.from_pretrained(model_name)
+        self.model = Wav2Vec2ForCTC.from_pretrained(model_name)
+        
+        # masked_spec_embedの再初期化
+        if hasattr(self.model, 'wav2vec2') and hasattr(self.model.wav2vec2, 'masked_spec_embed'):
+            if self.model.wav2vec2.masked_spec_embed is not None:
+                nn.init.uniform_(self.model.wav2vec2.masked_spec_embed.data, a=-0.01, b=0.01)
+        
+        self.vocab_size = self.model.config.vocab_size
+        self._device = device
+        
+        # パラメータ数の表示
+        total_params = sum(p.numel() for p in self.model.parameters())
+        trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        
+        print(f"\n[Model] PureWav2Vec2ASR initialized")
+        print(f"  Model: {model_name}")
+        print(f"  Vocab size: {self.vocab_size}")
+        print(f"  Total parameters: {total_params:,}")
+        print(f"  Trainable parameters: {trainable_params:,}")
+    
+    def forward(self, data):
+        """
+        Args:
+            data: dict with key "wav" (List[np.ndarray])
+        
+        Returns:
+            logits: Tensor[B, seq_len, vocab_size]
+        """
+        wav = data["wav"]
+        
+        if not wav or len(wav) == 0:
+            raise ValueError("Empty audio input received")
+        
+        for i, w in enumerate(wav):
+            if len(w) == 0:
+                raise ValueError(f"Audio sample {i} has zero length")
+        
+        if self._device is not None:
+            device = self._device
+        else:
+            device = next(self.model.parameters()).device
+        
+        processed = self.processor(
+            wav,
+            sampling_rate=16000,
+            return_tensors="pt",
+            padding=True
+        )
+        
+        input_values = processed.input_values.to(device)
+        attention_mask = processed.attention_mask.to(device) if hasattr(processed, 'attention_mask') else None
+        
+        if torch.isnan(input_values).any() or torch.isinf(input_values).any():
+            raise RuntimeError("Input values contain NaN or Inf after processing")
+        
+        outputs = self.model(
+            input_values,
+            attention_mask=attention_mask
+        )
+        
+        logits = outputs.logits
+        
+        if torch.isnan(logits).any():
+            raise RuntimeError("Logits contain NaN values")
+        if torch.isinf(logits).any():
+            raise RuntimeError("Logits contain Inf values")
+        
+        return logits
+
+
+def freeze_layers(model: PureWav2Vec2ASR, config: TrainingConfig):
     """レイヤーのfreeze設定"""
     print("\n" + "="*60)
     print("Layer Freeze Configuration")
     print("="*60)
     
-    # Vision Encoder
-    if config.freeze_vision_encoder:
-        for param in model.vision_encoder.model.parameters():
-            param.requires_grad = False
-        print("✓ Vision Encoder (DINOv2):  FROZEN")
+    if config.freeze_feature_encoder:
+        # Feature Encoder (CNN部分) をfreeze
+        if hasattr(model.model, 'wav2vec2'):
+            model.model.wav2vec2.feature_extractor._freeze_parameters()
+        print("✓ Feature Encoder:  FROZEN")
     else:
-        print("✓ Vision Encoder (DINOv2):  Trainable")
+        print("✓ Feature Encoder:  Trainable")
     
-    # Vision Adapter（常に学習可能）
-    print("✓ Visual Adapter:           Trainable")
+    print("✓ Transformer:      Trainable")
+    print("✓ LM Head:          Trainable")
     
-    # Audio Encoder CNN（常にfreeze）
-    for param in model.audio_encoder.feature_extractor.parameters():
-        param.requires_grad = False
-    print("✓ Audio Encoder (CNN):      FROZEN")
-    
-    # Audio Encoder Projection（常に学習可能）
-    print("✓ Audio Encoder (Proj):     Trainable")
-    
-    # Transformer Encoder
-    if config.freeze_transformer_encoder:
-        for param in model.encoder.parameters():
-            param.requires_grad = False
-        print("✓ Transformer Encoder:      FROZEN")
-    elif config.audio_trainable_layers > 0:
-        # 上位N層のみ学習可能
-        total_layers = len(model.encoder.layers)
-        frozen_layers = total_layers - config.audio_trainable_layers
-        
-        for i, layer in enumerate(model.encoder.layers):
-            if i < frozen_layers:
-                for param in layer.parameters():
-                    param.requires_grad = False
-            else:
-                for param in layer.parameters():
-                    param.requires_grad = True
-        
-        print(f"✓ Transformer Encoder:      Last {config.audio_trainable_layers} layers trainable")
-        print(f"                            First {frozen_layers} layers frozen")
-    else:
-        print("✓ Transformer Encoder:      Trainable (all layers)")
-    
-    # Classifier（常に学習可能）
-    print("✓ Classifier:               Trainable")
-    
-    # パラメータ統計
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total = sum(p.numel() for p in model.parameters())
     
@@ -258,9 +344,7 @@ def decode_predictions(
 ) -> List[str]:
     """
     CTCの予測結果をテキストにデコード (torch.unique_consecutive使用)
-    
-    注意: tokenizer.decode()は連続する同じトークンを統合してしまうため使用しない
-    例: [R, O, O, M] -> "ROM" (Oが1つに統合される)
+    VisionConditionedASRv3と同一の実装
     
     Args:
         logits: モデル出力 (batch_size, seq_len, vocab_size)
@@ -314,6 +398,7 @@ def compute_ctc_loss(
     
     target_ids = []
     target_lengths = []
+    
     for text in texts:
         tokens = tokenizer.encode(text, add_special_tokens=False)
         target_ids.extend(tokens)
@@ -336,7 +421,7 @@ def compute_ctc_loss(
 
 
 def train_one_epoch(
-    model: VisionConditionedASRv3,
+    model: PureWav2Vec2ASR,
     noise_augmenter: NoiseAugmenter,
     dataloader: DataLoader,
     optimizer: torch.optim.Optimizer,
@@ -357,10 +442,9 @@ def train_one_epoch(
     
     for batch_idx, batch in enumerate(pbar):
         try:
-            # ノイズ増強
             if noise_augmenter.noise_type != "none":
                 batch["wav"] = [noise_augmenter.apply(wav) for wav in batch["wav"]]
-
+            
             wav_lengths = batch["wav_lengths"].to(device)
             
             with autocast(device_type='cuda', enabled=config.use_amp, dtype=amp_dtype):
@@ -410,7 +494,7 @@ def train_one_epoch(
 
 
 def validate(
-    model: VisionConditionedASRv3,
+    model: PureWav2Vec2ASR,
     noise_augmenter: NoiseAugmenter,
     dataloader: DataLoader,
     tokenizer,
@@ -435,7 +519,7 @@ def validate(
             try:
                 if noise_augmenter.noise_type != "none":
                     batch["wav"] = [noise_augmenter.apply(wav) for wav in batch["wav"]]
-
+                
                 wav_lengths = batch["wav_lengths"].to(device)
                 
                 with autocast(device_type='cuda', enabled=config.use_amp, dtype=amp_dtype):
@@ -448,7 +532,7 @@ def validate(
                     num_batches += 1
                     pbar.set_postfix(loss=f"{current_loss:.4f}")
                 
-                # logitsを直接デコード関数に渡す（argmaxしない）
+                # logitsを直接デコード関数に渡す（VASRと統一）
                 pred_texts = decode_predictions(logits, tokenizer, blank_token_id=0)
                 all_predictions.extend(pred_texts)
                 all_references.extend(batch["text"])
@@ -481,7 +565,7 @@ def validate(
 
 
 def save_checkpoint(
-    model: VisionConditionedASRv3,
+    model: PureWav2Vec2ASR,
     optimizer: torch.optim.Optimizer,
     scaler: GradScaler,
     epoch: int,
@@ -511,7 +595,7 @@ def save_checkpoint(
 
 def load_checkpoint(
     checkpoint_dir: str,
-    model: VisionConditionedASRv3,
+    model: PureWav2Vec2ASR,
     optimizer: torch.optim.Optimizer,
     scaler: GradScaler,
     device: torch.device
@@ -549,26 +633,15 @@ def main():
     
     device = torch.device(config.device if torch.cuda.is_available() else "cpu")
     print(f"\n{'='*60}\nDevice: {device} | Batch: {config.batch_size} | LR: {config.learning_rate} | "
-          f"Epochs: {config.num_epochs}\nVisual Tokens: {config.visual_tokens} | "
-          f"Noise: {config.noise_type} | SNR: {config.snr_db}dB | "
+          f"Epochs: {config.num_epochs} | Noise: {config.noise_type} | SNR: {config.snr_db}dB | "
           f"Noise Prob: {config.noise_prob*100:.1f}% | AMP: {config.use_amp}\n{'='*60}\n")
     
-    tokenizer = AutoTokenizer.from_pretrained("facebook/wav2vec2-base-960h")
-    
-    # モデル初期化
-    model = VisionConditionedASRv3(
-        vocab_size=config.vocab_size,
-        visual_tokens=config.visual_tokens,
-        dropout=config.dropout,
-        use_visual_pos_embed=config.use_visual_pos_embed,
-        freeze_vision_encoder=config.freeze_vision_encoder,
-        device=device
-    ).to(device)
+    model = PureWav2Vec2ASR(model_name=config.model_name, device=device).to(device)
+    tokenizer = AutoTokenizer.from_pretrained(config.model_name)
     
     freeze_layers(model, config)
     scaler = GradScaler(enabled=config.use_amp)
     
-    # DataLoader作成
     train_loader = create_dataloader(
         json_path=config.train_json,
         audio_dir=config.audio_dir,
@@ -591,19 +664,18 @@ def main():
         validate_files=config.validate_files
     )
     
-    # Optimizer
     optimizer = torch.optim.AdamW(
         filter(lambda p: p.requires_grad, model.parameters()),
         lr=config.learning_rate,
         weight_decay=config.weight_decay
     )
-
-    # Noise Augmenter
+    
     noise_augmenter = NoiseAugmenter(
         noise_type=config.noise_type,
         snr_db=config.snr_db,
         noise_prob=config.noise_prob,
-        babble_path=config.babble_path
+        babble_path=config.babble_path,
+        sample_rate=16000
     )
     
     print("\n" + "="*60 + "\nStarting Training\n" + "="*60 + "\n")
