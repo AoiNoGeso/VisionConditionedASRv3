@@ -30,7 +30,7 @@ class TrainingConfig:
     
     # 学習設定
     batch_size: int = 20
-    num_epochs: int = 10
+    num_epochs: int = 15
     learning_rate: float = 1e-5
     weight_decay: float = 1e-5
     gradient_clip: float = 1.0
@@ -39,14 +39,14 @@ class TrainingConfig:
     # データローダー設定
     num_workers: int = 4
     max_audio_length: float = 10.0
-    validate_files: bool = True
+    validate_files: bool = False
     
     # レイヤーfreeze設定
     freeze_feature_encoder: bool = True  # CNNベースの特徴抽出器をfreeze
     
     # ノイズ設定（train.py準拠）
-    noise_type: str = "none"  # "none", "white", "pink", "babble"
-    snr_db: float = 10.0  # 全ノイズタイプ共通のSNR（dB）
+    noise_type: str = "babble"  # "none", "white", "pink", "babble"
+    snr_db: float = 0.0  # 全ノイズタイプ共通のSNR（dB）
     noise_prob: float = 0.5  # ノイズを付加する確率 (0.0-1.0)
     babble_path: str = "../../Datasets/NOISEX92/babble/signal.wav"  # babbleノイズのパス
     
@@ -55,18 +55,18 @@ class TrainingConfig:
     amp_dtype: str = "float16"  # "float16" or "bfloat16"
     
     # 保存設定
-    checkpoint_dir: str = "../../Models/wav2vec2-finetune/clear"
+    checkpoint_dir: str = "../../Models/wav2vec2-finetune/babble"
     save_epoch: int = 1
-    resume_from: Optional[str] = "../../Models/wav2vec2-finetune/clear/epoch_9"  # チェックポイントから再開する場合のパス
+    resume_from: Optional[str] = "../../Models/wav2vec2-finetune/clear/epoch_10"  # チェックポイントから再開する場合のパス
     
     # デバイス設定
-    device: str = "cuda:1"
+    device: str = "cuda"
     
     # ログ設定
     log_step: int = 50
-    validate_epoch: int = 5
+    validate_epoch: int = 1
     use_wandb: bool = True
-    wandb_project: str = "Wav2Vec2-Finetune-clean"
+    wandb_project: str = "Wav2Vec2-Finetune-babble"
 
 
 class NoiseAugmenter:

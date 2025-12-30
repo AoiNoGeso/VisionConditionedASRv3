@@ -1,28 +1,36 @@
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, Wav2Vec2Processor
 import os
-from dataclasses import dataclass
-from typing import Optional, List, Dict
+from dataclasses import dataclass, field
+from typing import Optional, List, Dict, Any
 import numpy as np
 from tqdm import tqdm
 import jiwer
 from safetensors.torch import load_file
 import librosa
 import csv
+import json
+from collections import defaultdict
+import random
 
-from train import TrainingConfig
+# 自作モジュールのインポート
 from model import VisionConditionedASRv3
 from dataloader import create_dataloader
+
+# 同ディレクトリのfinetune_noise.pyからクラスをインポート
+from finetune_noise import PureWav2Vec2ASR
 
 
 @dataclass
 class TestConfig:
-    """VisionConditionedASRv3 テスト設定"""
-    # モデルチェックポイント
-    checkpoint_dir: str = "../../Models/VisionConditionedASRv3/epoch_10"
-    # checkpoint_dir: str = "../../Models/wav2vec2-finetune/babble/epoch_10"
+    """ノイズ負荷テスト設定"""
+    # 提案モデルチェックポイント
+    checkpoint_dir: str = "../../Models/VisionConditionedASRv3/babble/epoch_15"
+    
+    # ベースラインモデルチェックポイント
+    baseline_checkpoint_dir: str = "../../Models/wav2vec2-finetune/babble/epoch_15"
     
     # データセットパス
     val_json: str = "../../Datasets/SpokenCOCO/SpokenCOCO_val_fixed.json"
@@ -32,7 +40,7 @@ class TestConfig:
     # モデル設定
     vocab_size: Optional[int] = None
     visual_tokens: int = 64
-    dropout: float = 0.1
+    dropout: float = 0.0
     use_visual_pos_embed: bool = True
     
     # データローダー設定
@@ -41,55 +49,34 @@ class TestConfig:
     max_audio_length: float = 10.0
     validate_files: bool = False
     
-    # ノイズ設定
-    noise_type: str = "white"  # "none", "white", "pink", "babble"
-    snr_db: float = -5.0
+    # 評価条件（リストで指定）
+    noise_types: List[str] = field(default_factory=lambda: ["none", "white", "pink", "babble"])
+    snr_dbs: List[float] = field(default_factory=lambda: [-10.0, -5.0, 0.0, 5.0, 10.0])
     babble_path: str = "../../Datasets/NOISEX92/babble/signal.wav"
     
-    # Vision設定
-    use_image: bool = True  # Falseの場合、visual特徴をゼロにする
+    # 繰り返し設定
+    num_runs: int = 3  # 各条件での実行回数
     
     # デバイス
     device: str = "cuda:0"
     
     # 結果保存
     save_results: bool = True
-    results_dir: str = "results/VisionConditionedASRv3/"
+    results_dir: str = "results/VisionConditionedASRv3_Comprehensive/"
     
     def __post_init__(self):
-        """結果保存ディレクトリを動的に設定"""
-        base_dir = self.results_dir
-        
-        # ノイズタイプでディレクトリ分け
-        if self.noise_type != "none":
-            base_dir += f"{self.noise_type}/snr_{self.snr_db}dB/"
-        else:
-            base_dir += "none/"
-        
-        # Vision有無でさらに分け
-        if self.use_image:
-            base_dir += "vision/"
-        else:
-            base_dir += "novision/"
-        
-        self.results_dir = base_dir
-        
         print(f"\n{'='*60}")
-        print("Test Configuration")
+        print("Comprehensive Test Configuration")
         print(f"{'='*60}")
         print(f"Results directory: {self.results_dir}")
-        print(f"Noise: {self.noise_type}")
-        if self.noise_type != "none":
-            print(f"SNR: {self.snr_db} dB")
-        print(f"Use image: {self.use_image}")
+        print(f"Noise Types: {self.noise_types}")
+        print(f"SNR Levels: {self.snr_dbs}")
+        print(f"Number of runs: {self.num_runs}")
         print(f"{'='*60}\n")
 
 
 class NoiseAugmenter:
-    """
-    独自実装のノイズ付加クラス（dB単位でSNR制御）
-    train_v3.pyと同じ実装
-    """
+    """ノイズ付加クラス"""
     def __init__(
         self,
         noise_type: str = "none",
@@ -103,26 +90,11 @@ class NoiseAugmenter:
         self.sample_rate = sample_rate
         self.babble_audio = None
         
-        print(f"\n[NoiseAugmenter] Type: {noise_type}")
-        print(f"  SNR: {snr_db} dB")
-        
-        if noise_type == "none":
-            print("  No noise augmentation")
-        elif noise_type == "white":
-            print(f"  White Noise")
-        elif noise_type == "pink":
-            print(f"  Pink Noise (1/f)")
-        elif noise_type == "babble":
+        if noise_type == "babble":
             if not babble_path or not os.path.exists(babble_path):
                 raise ValueError(f"Babble noise file not found: {babble_path}")
-            print(f"  Babble Noise")
-            print(f"  Loading: {babble_path}")
-            
             self.babble_audio, sr = librosa.load(babble_path, sr=self.sample_rate, mono=True)
             self.babble_audio = self.babble_audio.astype(np.float32)
-            print(f"  Loaded: {len(self.babble_audio)} samples ({len(self.babble_audio)/self.sample_rate:.2f}s)")
-        else:
-            raise ValueError(f"Unknown noise_type: {noise_type}")
     
     def _compute_rms(self, audio: np.ndarray) -> float:
         return np.sqrt(np.mean(audio ** 2))
@@ -196,48 +168,22 @@ class NoiseAugmenter:
         return noisy_audio
 
 
-def decode_predictions(
-    logits: torch.Tensor,
-    tokenizer,
-    blank_token_id: int = 0
-) -> List[str]:
-    """
-    CTCの予測結果をテキストにデコード
-    
-    注意: tokenizer.decode()は連続する同じトークンを統合してしまうため使用しない
-    例: [R, O, O, M] -> "ROM" (Oが1つに統合される)
-    
-    Args:
-        logits: モデル出力 (batch_size, seq_len, vocab_size)
-        tokenizer: トークナイザー
-        blank_token_id: blankトークンのID
-    
-    Returns:
-        デコードされたテキストのリスト
-    """
+def decode_predictions(logits: torch.Tensor, tokenizer, blank_token_id: int = 0) -> List[str]:
+    """CTCの予測結果をテキストにデコード"""
     decoded_texts = []
-    
-    # トークンID→文字のマッピングを作成
     id2char = {v: k for k, v in tokenizer.get_vocab().items()}
     
-    # バッチごとに処理
-    for logit_seq in logits:  # shape: (seq_len, vocab_size)
-        # 各フレームで最大確率のトークンを取得
-        indices = torch.argmax(logit_seq, dim=-1)  # shape: (seq_len,)
-        
-        # 連続する重複を削除（CTCの標準的な処理）
+    for logit_seq in logits:
+        indices = torch.argmax(logit_seq, dim=-1)
         indices = torch.unique_consecutive(indices, dim=0)
-        
-        # blankトークンを除去
         indices = [i.item() for i in indices if i.item() != blank_token_id]
         
-        # トークンIDを直接文字列に変換（tokenizer.decodeは使わない）
         chars = []
         for idx in indices:
             char = id2char.get(idx, '')
-            if char == '|':  # '|'はスペース（単語境界）
+            if char == '|':
                 chars.append(' ')
-            elif char and char not in ['<pad>', '<s>', '</s>', '<unk>']:  # 特殊トークンを除外
+            elif char and char not in ['<pad>', '<s>', '</s>', '<unk>']:
                 chars.append(char)
         
         decoded_text = ''.join(chars)
@@ -277,253 +223,154 @@ def compute_wer(references: List[str], hypotheses: List[str]) -> Dict[str, float
     }
 
 
-def load_checkpoint(
-    checkpoint_dir: str,
-    model: VisionConditionedASRv3,
-    device: torch.device
-):
-    """チェックポイントからモデルを読み込み"""
+def load_model_weights(model: nn.Module, checkpoint_dir: str, device: torch.device):
+    """チェックポイントから重みをロード"""
     if not os.path.exists(checkpoint_dir):
-        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_dir}")
-    
+        print(f"Warning: Checkpoint not found at {checkpoint_dir}")
+        return 0
+
     epoch_num = os.path.basename(checkpoint_dir).split('_')[-1]
     model_path = os.path.join(checkpoint_dir, f"model_epoch_{epoch_num}.safetensors")
-    state_path = os.path.join(checkpoint_dir, f"checkpoint_epoch_{epoch_num}_state.pt")
     
-    if not os.path.exists(model_path) or not os.path.exists(state_path):
-        raise FileNotFoundError(f"Checkpoint files incomplete in: {checkpoint_dir}")
-    
-    print(f"\n{'='*60}")
-    print("Loading Checkpoint")
-    print(f"{'='*60}")
-    print(f"From: {checkpoint_dir}")
-    
-    state_dict = load_file(model_path, device=str(device))
-    model.load_state_dict(state_dict)
-    checkpoint_state = torch.load(state_path, map_location=device, weights_only=False)
-    
-    epoch = checkpoint_state.get('epoch', -1)
-    train_loss = checkpoint_state.get('train_loss', 0.0)
-    val_loss = checkpoint_state.get('val_loss', 0.0)
-    
-    print(f"Epoch: {epoch + 1}")
-    print(f"Train Loss: {train_loss:.4f}")
-    print(f"Val Loss: {val_loss:.4f}")
-    print(f"{'='*60}\n")
-    
-    return epoch + 1
+    if os.path.exists(model_path):
+        print(f"Loading weights from {model_path}...")
+        state_dict = load_file(model_path, device=str(device))
+        model.load_state_dict(state_dict)
+        print("Loaded successfully.")
+        return epoch_num
+    else:
+        print(f"Model file not found: {model_path}")
+        return 0
 
 
-def evaluate(
-    model: VisionConditionedASRv3,
+def evaluate_single_run(
+    model: nn.Module,
+    model_type: str,  # "proposed" or "baseline"
+    use_vision: bool, # proposedの場合のみ有効
     dataloader: DataLoader,
     tokenizer,
     noise_augmenter: NoiseAugmenter,
-    device: torch.device,
-    config: TestConfig
-):
-    """モデルを評価"""
+    run_number: int,
+    seed: int
+) -> Dict[str, Any]:
+    """1回の評価実行を行う関数"""
+    
+    # シード設定
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        
     model.eval()
     
-    # Vision無効化のためのフック
+    # VisionConditionedASRv3かつVision無効の場合のフック設定
     hook_handle = None
-    if not config.use_image:
-        print("\n[Evaluation] Image disabled (visual features set to zero)")
-        
+    if model_type == "proposed" and not use_vision:
         def zero_vision_output_hook(module, input, output):
             return torch.zeros_like(output)
-        
+        # VisionConditionedASRv3はvision_encoder属性を持つと仮定
         hook_handle = model.vision_encoder.register_forward_hook(zero_vision_output_hook)
-    
+        
     all_references = []
     all_hypotheses = []
     all_samples = []
     
-    print(f"\n{'='*60}")
-    print("Starting Evaluation")
-    print(f"{'='*60}")
-    print(f"Dataset size: {len(dataloader.dataset)}")
-    print(f"Batches: {len(dataloader)}")
-    print(f"Noise: {config.noise_type}")
-    if config.noise_type != "none":
-        print(f"SNR: {config.snr_db} dB")
-    print(f"Use image: {config.use_image}")
-    print(f"{'='*60}\n")
-    
     try:
         with torch.no_grad():
-            for batch_idx, batch in enumerate(tqdm(dataloader, desc="Evaluating")):
-                try:
-                    # ノイズ付加
-                    if noise_augmenter.noise_type != "none":
-                        batch["wav"] = [noise_augmenter.apply(wav) for wav in batch["wav"]]
-                    
-                    # モデル推論
-                    logits = model(batch)
-                    
-                    # デコード（修正版：tokenizer.decodeを使わない）
-                    hypotheses = decode_predictions(logits, tokenizer, blank_token_id=0)
-                    references = batch["text"]
-                    
-                    all_references.extend(references)
-                    all_hypotheses.extend(hypotheses)
-                    
-                    # サンプル保存（最初の100件）
-                    if len(all_samples) < 100:
-                        for ref, hyp in zip(references, hypotheses):
-                            all_samples.append({'reference': ref, 'hypothesis': hyp})
+            for batch in tqdm(dataloader, desc=f"Run {run_number} ({model_type}, Vision={use_vision})", leave=False):
+                # ノイズ付加
+                if noise_augmenter.noise_type != "none":
+                    batch["wav"] = [noise_augmenter.apply(wav) for wav in batch["wav"]]
                 
-                except Exception as e:
-                    print(f"\n[Error] Batch {batch_idx}: {e}")
-                    import traceback
-                    traceback.print_exc()
-                    continue
-    
+                # 推論
+                logits = model(batch)
+                
+                # デコード
+                hypotheses = decode_predictions(logits, tokenizer, blank_token_id=0)
+                references = batch["text"]
+                
+                all_references.extend(references)
+                all_hypotheses.extend(hypotheses)
+                
+                # サンプル保存（最初の20件程度）
+                if len(all_samples) < 20:
+                    for ref, hyp in zip(references, hypotheses):
+                        all_samples.append({'reference': ref, 'hypothesis': hyp})
+                        
+    except Exception as e:
+        print(f"Error during evaluation: {e}")
+        import traceback
+        traceback.print_exc()
+        
     finally:
-        # フックの削除
         if hook_handle is not None:
             hook_handle.remove()
-            print("\n[Evaluation] Hook removed")
-    
-    # WER計算
-    print(f"\n{'='*60}\nComputing WER...\n{'='*60}")
+
+    # 指標計算
     wer_metrics = compute_wer(all_references, all_hypotheses)
-    
-    # 結果表示
-    print(f"\n{'='*60}")
-    print("Evaluation Results")
-    print(f"{'='*60}")
-    print(f"Samples: {len(all_references)}")
-    print(f"Noise: {config.noise_type}")
-    if config.noise_type != "none":
-        print(f"SNR: {config.snr_db} dB")
-    print(f"Use image: {config.use_image}")
-    print(f"\nWER: {wer_metrics['wer']:.2f}%")
-    print(f"MER: {wer_metrics['mer']:.2f}%")
-    print(f"WIL: {wer_metrics['wil']:.2f}%")
-    print(f"\nError Breakdown:")
-    print(f"  Substitutions: {wer_metrics['substitutions']}")
-    print(f"  Deletions:     {wer_metrics['deletions']}")
-    print(f"  Insertions:    {wer_metrics['insertions']}")
-    print(f"  Hits:          {wer_metrics['hits']}")
-    print(f"{'='*60}\n")
-    
-    # サンプル表示
-    print(f"{'='*60}\nSample Predictions (first 5):\n{'='*60}")
-    for i, sample in enumerate(all_samples[:5]):
-        print(f"\nSample {i+1}:")
-        print(f"  Ref:  {sample['reference']}")
-        print(f"  Hyp:  {sample['hypothesis']}")
-    print(f"{'='*60}\n")
     
     return {
         'wer_metrics': wer_metrics,
         'num_samples': len(all_references),
         'references': all_references,
         'hypotheses': all_hypotheses,
-        'samples': all_samples
+        'samples': all_samples,
+        'seed': seed,
+        'model_type': model_type,
+        'use_vision': use_vision
     }
 
 
-def save_results(
-    results: Dict,
+def save_run_details(
+    result: Dict,
+    output_dir: str,
+    base_filename: str,
     config: TestConfig,
-    checkpoint_epoch: int
+    noise_info: Dict
 ):
-    """結果をファイルに保存"""
-    os.makedirs(config.results_dir, exist_ok=True)
+    """個別の実行結果（txt, csv）を保存"""
+    os.makedirs(output_dir, exist_ok=True)
     
-    # ファイル名: vision/novision_noise_epoch
-    if config.use_image:
-        prefix = "vision"
-    else:
-        prefix = "novision"
-    
-    base_filename = f"{prefix}_{config.noise_type}_epoch{checkpoint_epoch}"
-    
-    # テキストファイル
-    results_file = os.path.join(config.results_dir, f"{base_filename}.txt")
-    
-    with open(results_file, 'w', encoding='utf-8') as f:
+    # TXT保存
+    txt_path = os.path.join(output_dir, f"{base_filename}.txt")
+    with open(txt_path, 'w', encoding='utf-8') as f:
         f.write("="*60 + "\n")
-        f.write("VisionConditionedASRv3 Evaluation Results\n")
+        f.write(f"Evaluation Details: {base_filename}\n")
         f.write("="*60 + "\n\n")
-        
-        f.write(f"Checkpoint: {config.checkpoint_dir}\n")
-        f.write(f"Epoch: {checkpoint_epoch}\n")
-        f.write(f"Dataset: {config.val_json}\n")
-        f.write(f"Use Image: {config.use_image}\n")
-        f.write(f"Noise Type: {config.noise_type}\n")
-        if config.noise_type != "none":
-            f.write(f"SNR: {config.snr_db} dB\n")
-        f.write(f"\nTotal samples: {results['num_samples']}\n")
-        f.write("\n" + "="*60 + "\n")
-        f.write("Metrics:\n")
-        f.write("="*60 + "\n")
-        f.write(f"WER: {results['wer_metrics']['wer']:.2f}%\n")
-        f.write(f"MER: {results['wer_metrics']['mer']:.2f}%\n")
-        f.write(f"WIL: {results['wer_metrics']['wil']:.2f}%\n")
-        f.write(f"\nError Breakdown:\n")
-        f.write(f"  Substitutions: {results['wer_metrics']['substitutions']}\n")
-        f.write(f"  Deletions:     {results['wer_metrics']['deletions']}\n")
-        f.write(f"  Insertions:    {results['wer_metrics']['insertions']}\n")
-        f.write(f"  Hits:          {results['wer_metrics']['hits']}\n")
-        f.write("\n" + "="*60 + "\n")
-        f.write("Sample Predictions (first 20):\n")
-        f.write("="*60 + "\n\n")
-        
-        for i, sample in enumerate(results['samples'][:20]):
-            f.write(f"Sample {i+1}:\n")
-            f.write(f"  REF: {sample['reference']}\n")
-            f.write(f"  HYP: {sample['hypothesis']}\n\n")
-    
-    print(f"[Results] Saved to: {results_file}")
-    
-    # CSVファイル
-    csv_file = os.path.join(config.results_dir, f"{base_filename}.csv")
-    
-    with open(csv_file, 'w', encoding='utf-8', newline='') as f:
+        f.write(f"Model Type: {result['model_type']}\n")
+        f.write(f"Use Vision: {result['use_vision']}\n")
+        f.write(f"Noise Type: {noise_info['type']}\n")
+        f.write(f"SNR: {noise_info['snr']} dB\n")
+        f.write(f"Seed: {result['seed']}\n")
+        f.write(f"\nTotal Samples: {result['num_samples']}\n")
+        f.write(f"WER: {result['wer_metrics']['wer']:.2f}%\n")
+        f.write(f"MER: {result['wer_metrics']['mer']:.2f}%\n")
+        f.write(f"WIL: {result['wer_metrics']['wil']:.2f}%\n")
+        f.write("\nSample Predictions:\n")
+        for i, sample in enumerate(result['samples']):
+            f.write(f"{i+1}. Ref: {sample['reference']}\n")
+            f.write(f"   Hyp: {sample['hypothesis']}\n")
+            
+    # CSV保存
+    csv_path = os.path.join(output_dir, f"{base_filename}.csv")
+    with open(csv_path, 'w', encoding='utf-8', newline='') as f:
         writer = csv.writer(f)
         writer.writerow(['Index', 'Reference', 'Hypothesis'])
-        for i, (ref, hyp) in enumerate(zip(results['references'], results['hypotheses'])):
+        for i, (ref, hyp) in enumerate(zip(result['references'], result['hypotheses'])):
             writer.writerow([i+1, ref, hyp])
-    
-    print(f"[Results] Predictions saved to: {csv_file}\n")
 
 
-def main():
-    """メイン実行関数"""
+def run_comprehensive_test():
+    """全条件を一括実行するメイン関数"""
     config = TestConfig()
-    
     device = torch.device(config.device if torch.cuda.is_available() else "cpu")
     
-    print(f"\n{'='*60}")
-    print("VisionConditionedASRv3 Test Script")
-    print(f"{'='*60}")
-    print(f"Device: {device}")
-    print(f"Checkpoint: {config.checkpoint_dir}")
-    print(f"Batch size: {config.batch_size}")
-    print(f"Noise: {config.noise_type}")
-    if config.noise_type != "none":
-        print(f"SNR: {config.snr_db} dB")
-    print(f"Use image: {config.use_image}")
-    print(f"{'='*60}\n")
-    
-    # ノイズ増強器の初期化
-    noise_augmenter = NoiseAugmenter(
-        noise_type=config.noise_type,
-        snr_db=config.snr_db,
-        babble_path=config.babble_path,
-        sample_rate=16000
-    )
-    
-    # トークナイザーの読み込み
-    print("\n[Setup] Loading tokenizer...")
+    print("\n[Setup] Loading Tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained("facebook/wav2vec2-base-960h")
     
-    # モデルの初期化
-    print("[Setup] Initializing model...")
-    model = VisionConditionedASRv3(
+    # 1. 提案モデルのロード
+    print("\n[Setup] Loading Proposed Model (VisionConditionedASRv3)...")
+    proposed_model = VisionConditionedASRv3(
         vocab_size=config.vocab_size,
         visual_tokens=config.visual_tokens,
         dropout=config.dropout,
@@ -531,17 +378,19 @@ def main():
         freeze_vision_encoder=True,
         device=device
     ).to(device)
+    prop_epoch = load_model_weights(proposed_model, config.checkpoint_dir, device)
     
-    # チェックポイントの読み込み
-    checkpoint_epoch = load_checkpoint(
-        checkpoint_dir=config.checkpoint_dir,
-        model=model,
+    # 2. ベースラインモデルのロード
+    print("\n[Setup] Loading Baseline Model (PureWav2Vec2ASR)...")
+    baseline_model = PureWav2Vec2ASR(
+        model_name="facebook/wav2vec2-base-960h",
         device=device
-    )
+    ).to(device)
+    base_epoch = load_model_weights(baseline_model, config.baseline_checkpoint_dir, device)
     
-    # データローダーの作成
-    print("\n[Setup] Creating dataloader...")
-    val_loader = create_dataloader(
+    # 3. データローダー作成
+    print("\n[Setup] Creating DataLoader...")
+    dataloader = create_dataloader(
         json_path=config.val_json,
         audio_dir=config.audio_dir,
         image_dir=config.image_dir,
@@ -552,26 +401,132 @@ def main():
         validate_files=config.validate_files
     )
     
-    # 評価実行
-    results = evaluate(
-        model=model,
-        dataloader=val_loader,
-        tokenizer=tokenizer,
-        noise_augmenter=noise_augmenter,
-        device=device,
-        config=config
-    )
+    # 結果集計用
+    # 構造: results[noise_type][condition_key] = { 'with_vision':..., 'without_vision':..., 'baseline':... }
+    final_results = defaultdict(lambda: defaultdict(dict))
     
-    # 結果保存
-    if config.save_results:
-        save_results(
-            results=results,
-            config=config,
-            checkpoint_epoch=checkpoint_epoch
-        )
+    # ループ開始
+    total_steps = len(config.noise_types) * (len(config.snr_dbs) + 1) * config.num_runs * 3
+    print(f"\n[Start] Starting comprehensive evaluation loop...")
     
-    print("="*60 + "\nEvaluation Completed!\n" + "="*60 + "\n")
+    for noise_type in config.noise_types:
+        # Noneノイズの場合はSNRループは1回だけ（None）
+        snr_list = [None] if noise_type == "none" else config.snr_dbs
+        
+        for snr in snr_list:
+            # ノイズ増強器の準備
+            current_snr = snr if snr is not None else 0.0
+            augmenter = NoiseAugmenter(
+                noise_type=noise_type,
+                snr_db=current_snr,
+                babble_path=config.babble_path
+            )
+            
+            # 保存用ディレクトリパスの作成
+            # results/VisionConditionedASRv3_Comprehensive/babble/snr_5.0dB/
+            snr_str = "Clean" if snr is None else f"snr_{snr}dB"
+            output_dir = os.path.join(config.results_dir, noise_type, snr_str)
+            
+            # 条件キー（JSON集計用）
+            cond_key = f"{noise_type}" + (f"_snr{snr}" if snr is not None else "")
+            
+            # 複数回実行の平均を取るためのリスト
+            runs_metrics = defaultdict(list)
+            
+            for run in range(1, config.num_runs + 1):
+                seed = 42 + run - 1
+                print(f"\n--- {noise_type} | {snr_str} | Run {run} ---")
+                
+                # 1. Proposed (With Vision)
+                res_vis = evaluate_single_run(
+                    proposed_model, "proposed", True, dataloader, tokenizer, 
+                    augmenter, run, seed
+                )
+                save_run_details(res_vis, output_dir, f"vision_run{run}", config, {'type': noise_type, 'snr': current_snr})
+                runs_metrics['with_vision'].append(res_vis)
+
+                # 2. Proposed (Without Vision)
+                res_novis = evaluate_single_run(
+                    proposed_model, "proposed", False, dataloader, tokenizer, 
+                    augmenter, run, seed
+                )
+                save_run_details(res_novis, output_dir, f"novision_run{run}", config, {'type': noise_type, 'snr': current_snr})
+                runs_metrics['without_vision'].append(res_novis)
+                
+                # 3. Baseline
+                res_base = evaluate_single_run(
+                    baseline_model, "baseline", False, dataloader, tokenizer, 
+                    augmenter, run, seed
+                )
+                save_run_details(res_base, output_dir, f"baseline_run{run}", config, {'type': noise_type, 'snr': current_snr})
+                runs_metrics['baseline'].append(res_base)
+            
+            # 平均メトリクスの計算とJSONへの格納
+            for model_cond in ['with_vision', 'without_vision', 'baseline']:
+                avg_wer = np.mean([r['wer_metrics']['wer'] for r in runs_metrics[model_cond]])
+                # 代表として最後のRunのmetrics詳細を保持しつつ、WERだけ平均値に置き換える等の処理が可能だが
+                # ここではanalyze.py互換のため、平均WERを計算して格納する
+                
+                # 集計データの作成
+                aggregated = {
+                    'wer_metrics': {
+                        'wer': avg_wer,
+                        'mer': np.mean([r['wer_metrics']['mer'] for r in runs_metrics[model_cond]]),
+                        'wil': np.mean([r['wer_metrics']['wil'] for r in runs_metrics[model_cond]])
+                    },
+                    'num_samples': runs_metrics[model_cond][0]['num_samples'],
+                    'all_runs_wer': [r['wer_metrics']['wer'] for r in runs_metrics[model_cond]]
+                }
+                final_results[noise_type][cond_key][model_cond] = aggregated
+
+            # 貢献度の計算（平均WERを使用）
+            avg_vis = final_results[noise_type][cond_key]['with_vision']['wer_metrics']['wer']
+            avg_novis = final_results[noise_type][cond_key]['without_vision']['wer_metrics']['wer']
+            avg_base = final_results[noise_type][cond_key]['baseline']['wer_metrics']['wer']
+            
+            imp_vis = avg_novis - avg_vis
+            imp_base = avg_base - avg_vis
+            
+            final_results[noise_type][cond_key]['contribution'] = {
+                'wer_improvement': imp_vis,
+                'improvement_rate': (imp_vis / avg_novis * 100) if avg_novis > 0 else 0,
+                'wer_improvement_vs_baseline': imp_base,
+                'improvement_rate_vs_baseline': (imp_base / avg_base * 100) if avg_base > 0 else 0,
+                'wer_with_vision': avg_vis,
+                'wer_without_vision': avg_novis,
+                'wer_baseline': avg_base
+            }
+            
+            print(f"  > Avg WER (Vision): {avg_vis:.2f}%")
+            print(f"  > Avg WER (NoVis):  {avg_novis:.2f}%")
+            print(f"  > Avg WER (Base):   {avg_base:.2f}%")
+
+    # 最終的なJSONの保存
+    json_path = os.path.join(config.results_dir, "comprehensive_results.json")
+    
+    # メタデータ付与
+    output_json = {
+        '_metadata': {
+            'checkpoint': config.checkpoint_dir,
+            'baseline_checkpoint': config.baseline_checkpoint_dir,
+            'noise_types': config.noise_types,
+            'snr_values': config.snr_dbs,
+            'num_runs': config.num_runs,
+            'dataset_size': len(dataloader.dataset)
+        }
+    }
+    # resultsの中身をマージ
+    for k, v in final_results.items():
+        output_json[k] = v
+        
+    with open(json_path, 'w') as f:
+        json.dump(output_json, f, indent=2)
+        
+    print(f"\n{'='*60}")
+    print(f"All tests finished. Results saved to: {config.results_dir}")
+    print(f"Summary JSON: {json_path}")
+    print(f"{'='*60}\n")
 
 
 if __name__ == "__main__":
-    main()
+    run_comprehensive_test()
