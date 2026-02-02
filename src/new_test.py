@@ -26,10 +26,14 @@ from finetune_noise import PureWav2Vec2ASR
 @dataclass
 class TestConfig:
     """ノイズ負荷テスト設定"""
-    # 提案モデルチェックポイント
+    # 評価対象モデルの選択（複数選択可能）
+    eval_models: List[str] = field(default_factory=lambda: ["vision"])
+    # 選択肢: "baseline" (Wav2Vec2単体), "vision" (VASR+画像), "novision" (VASR画像なし)
+    
+    # 提案モデル(VASR)チェックポイント
     checkpoint_dir: str = "../../Models/VisionConditionedASRv3/white/epoch_15"
     
-    # ベースラインモデルチェックポイント
+    # ベースラインモデル(Wav2Vec2単体)チェックポイント
     baseline_checkpoint_dir: str = "../../Models/wav2vec2-finetune/white/epoch_15"
     
     # データセットパス
@@ -44,13 +48,13 @@ class TestConfig:
     use_visual_pos_embed: bool = True
     
     # データローダー設定
-    batch_size: int = 32
+    batch_size: int = 30
     num_workers: int = 4
     max_audio_length: float = 10.0
     validate_files: bool = False
     
     # 評価条件（リストで指定）
-    noise_types: List[str] = field(default_factory=lambda: ["none", "white", "pink", "babble"])
+    noise_types: List[str] = field(default_factory=lambda: ["babble"]) # "none", "white", "pink", "babble"
     snr_dbs: List[float] = field(default_factory=lambda: [-10.0, -5.0, 0.0, 5.0, 10.0])
     babble_path: str = "../../Datasets/NOISEX92/babble/signal.wav"
     
@@ -58,16 +62,23 @@ class TestConfig:
     num_runs: int = 3  # 各条件での実行回数
     
     # デバイス
-    device: str = "cuda:0"
+    device: str = "cuda:1"
     
     # 結果保存
     save_results: bool = True
     results_dir: str = "results/PrefixVASR_white/"
     
     def __post_init__(self):
+        # 評価対象モデルの検証
+        valid_models = ["baseline", "vision", "novision"]
+        for model in self.eval_models:
+            if model not in valid_models:
+                raise ValueError(f"Invalid model type: {model}. Choose from {valid_models}")
+        
         print(f"\n{'='*60}")
         print("Comprehensive Test Configuration")
         print(f"{'='*60}")
+        print(f"Evaluation Models: {self.eval_models}")
         print(f"Results directory: {self.results_dir}")
         print(f"Noise Types: {self.noise_types}")
         print(f"SNR Levels: {self.snr_dbs}")
@@ -245,8 +256,7 @@ def load_model_weights(model: nn.Module, checkpoint_dir: str, device: torch.devi
 
 def evaluate_single_run(
     model: nn.Module,
-    model_type: str,  # "proposed" or "baseline"
-    use_vision: bool, # proposedの場合のみ有効
+    model_name: str,  # "baseline", "vision", "novision"
     dataloader: DataLoader,
     tokenizer,
     noise_augmenter: NoiseAugmenter,
@@ -263,13 +273,14 @@ def evaluate_single_run(
         
     model.eval()
     
-    # VisionConditionedASRv3かつVision無効の場合のフック設定
+    # novisionの場合のフック設定（VisionConditionedASRv3のみ）
     hook_handle = None
-    if model_type == "proposed" and not use_vision:
+    if model_name == "novision":
         def zero_vision_output_hook(module, input, output):
             return torch.zeros_like(output)
         # VisionConditionedASRv3はvision_encoder属性を持つと仮定
-        hook_handle = model.vision_encoder.register_forward_hook(zero_vision_output_hook)
+        if hasattr(model, 'vision_encoder'):
+            hook_handle = model.vision_encoder.register_forward_hook(zero_vision_output_hook)
         
     all_references = []
     all_hypotheses = []
@@ -277,7 +288,7 @@ def evaluate_single_run(
     
     try:
         with torch.no_grad():
-            for batch in tqdm(dataloader, desc=f"Run {run_number} ({model_type}, Vision={use_vision})", leave=False):
+            for batch in tqdm(dataloader, desc=f"Run {run_number} ({model_name})", leave=False):
                 # ノイズ付加
                 if noise_augmenter.noise_type != "none":
                     batch["wav"] = [noise_augmenter.apply(wav) for wav in batch["wav"]]
@@ -316,8 +327,7 @@ def evaluate_single_run(
         'hypotheses': all_hypotheses,
         'samples': all_samples,
         'seed': seed,
-        'model_type': model_type,
-        'use_vision': use_vision
+        'model_name': model_name
     }
 
 
@@ -337,8 +347,7 @@ def save_run_details(
         f.write("="*60 + "\n")
         f.write(f"Evaluation Details: {base_filename}\n")
         f.write("="*60 + "\n\n")
-        f.write(f"Model Type: {result['model_type']}\n")
-        f.write(f"Use Vision: {result['use_vision']}\n")
+        f.write(f"Model: {result['model_name']}\n")
         f.write(f"Noise Type: {noise_info['type']}\n")
         f.write(f"SNR: {noise_info['snr']} dB\n")
         f.write(f"Seed: {result['seed']}\n")
@@ -368,27 +377,36 @@ def run_comprehensive_test():
     print("\n[Setup] Loading Tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained("facebook/wav2vec2-base-960h")
     
-    # 1. 提案モデルのロード
-    print("\n[Setup] Loading Proposed Model (VisionConditionedASRv3)...")
-    proposed_model = VisionConditionedASRv3(
-        vocab_size=config.vocab_size,
-        visual_tokens=config.visual_tokens,
-        dropout=config.dropout,
-        use_visual_pos_embed=config.use_visual_pos_embed,
-        freeze_vision_encoder=True,
-        device=device
-    ).to(device)
-    prop_epoch = load_model_weights(proposed_model, config.checkpoint_dir, device)
+    # モデルのロード（選択されたもののみ）
+    models = {}
     
-    # 2. ベースラインモデルのロード
-    print("\n[Setup] Loading Baseline Model (PureWav2Vec2ASR)...")
-    baseline_model = PureWav2Vec2ASR(
-        model_name="facebook/wav2vec2-base-960h",
-        device=device
-    ).to(device)
-    base_epoch = load_model_weights(baseline_model, config.baseline_checkpoint_dir, device)
+    if "vision" in config.eval_models or "novision" in config.eval_models:
+        print("\n[Setup] Loading Proposed Model (VisionConditionedASRv3)...")
+        proposed_model = VisionConditionedASRv3(
+            vocab_size=config.vocab_size,
+            visual_tokens=config.visual_tokens,
+            dropout=config.dropout,
+            use_visual_pos_embed=config.use_visual_pos_embed,
+            freeze_vision_encoder=True,
+            device=device
+        ).to(device)
+        prop_epoch = load_model_weights(proposed_model, config.checkpoint_dir, device)
+        
+        if "vision" in config.eval_models:
+            models["vision"] = proposed_model
+        if "novision" in config.eval_models:
+            models["novision"] = proposed_model  # 同じモデルを使用（hookで制御）
     
-    # 3. データローダー作成
+    if "baseline" in config.eval_models:
+        print("\n[Setup] Loading Baseline Model (PureWav2Vec2ASR)...")
+        baseline_model = PureWav2Vec2ASR(
+            model_name="facebook/wav2vec2-base-960h",
+            device=device
+        ).to(device)
+        base_epoch = load_model_weights(baseline_model, config.baseline_checkpoint_dir, device)
+        models["baseline"] = baseline_model
+    
+    # データローダー作成
     print("\n[Setup] Creating DataLoader...")
     dataloader = create_dataloader(
         json_path=config.val_json,
@@ -402,12 +420,12 @@ def run_comprehensive_test():
     )
     
     # 結果集計用
-    # 構造: results[noise_type][condition_key] = { 'with_vision':..., 'without_vision':..., 'baseline':... }
+    # 構造: results[noise_type][condition_key][model_name] = {...}
     final_results = defaultdict(lambda: defaultdict(dict))
     
     # ループ開始
-    total_steps = len(config.noise_types) * (len(config.snr_dbs) + 1) * config.num_runs * 3
     print(f"\n[Start] Starting comprehensive evaluation loop...")
+    print(f"Evaluating models: {config.eval_models}")
     
     for noise_type in config.noise_types:
         # Noneノイズの場合はSNRループは1回だけ（None）
@@ -423,7 +441,6 @@ def run_comprehensive_test():
             )
             
             # 保存用ディレクトリパスの作成
-            # results/VisionConditionedASRv3_Comprehensive/babble/snr_5.0dB/
             snr_str = "Clean" if snr is None else f"snr_{snr}dB"
             output_dir = os.path.join(config.results_dir, noise_type, snr_str)
             
@@ -437,69 +454,56 @@ def run_comprehensive_test():
                 seed = 42 + run - 1
                 print(f"\n--- {noise_type} | {snr_str} | Run {run} ---")
                 
-                # 1. Proposed (With Vision)
-                res_vis = evaluate_single_run(
-                    proposed_model, "proposed", True, dataloader, tokenizer, 
-                    augmenter, run, seed
-                )
-                save_run_details(res_vis, output_dir, f"vision_run{run}", config, {'type': noise_type, 'snr': current_snr})
-                runs_metrics['with_vision'].append(res_vis)
-
-                # 2. Proposed (Without Vision)
-                res_novis = evaluate_single_run(
-                    proposed_model, "proposed", False, dataloader, tokenizer, 
-                    augmenter, run, seed
-                )
-                save_run_details(res_novis, output_dir, f"novision_run{run}", config, {'type': noise_type, 'snr': current_snr})
-                runs_metrics['without_vision'].append(res_novis)
-                
-                # 3. Baseline
-                res_base = evaluate_single_run(
-                    baseline_model, "baseline", False, dataloader, tokenizer, 
-                    augmenter, run, seed
-                )
-                save_run_details(res_base, output_dir, f"baseline_run{run}", config, {'type': noise_type, 'snr': current_snr})
-                runs_metrics['baseline'].append(res_base)
+                # 選択されたモデルのみ評価
+                for model_name in config.eval_models:
+                    model = models[model_name]
+                    
+                    result = evaluate_single_run(
+                        model, model_name, dataloader, tokenizer, 
+                        augmenter, run, seed
+                    )
+                    save_run_details(
+                        result, output_dir, f"{model_name}_run{run}", 
+                        config, {'type': noise_type, 'snr': current_snr}
+                    )
+                    runs_metrics[model_name].append(result)
             
             # 平均メトリクスの計算とJSONへの格納
-            for model_cond in ['with_vision', 'without_vision', 'baseline']:
-                avg_wer = np.mean([r['wer_metrics']['wer'] for r in runs_metrics[model_cond]])
-                # 代表として最後のRunのmetrics詳細を保持しつつ、WERだけ平均値に置き換える等の処理が可能だが
-                # ここではanalyze.py互換のため、平均WERを計算して格納する
+            for model_name in config.eval_models:
+                avg_wer = np.mean([r['wer_metrics']['wer'] for r in runs_metrics[model_name]])
                 
                 # 集計データの作成
                 aggregated = {
                     'wer_metrics': {
                         'wer': avg_wer,
-                        'mer': np.mean([r['wer_metrics']['mer'] for r in runs_metrics[model_cond]]),
-                        'wil': np.mean([r['wer_metrics']['wil'] for r in runs_metrics[model_cond]])
+                        'mer': np.mean([r['wer_metrics']['mer'] for r in runs_metrics[model_name]]),
+                        'wil': np.mean([r['wer_metrics']['wil'] for r in runs_metrics[model_name]])
                     },
-                    'num_samples': runs_metrics[model_cond][0]['num_samples'],
-                    'all_runs_wer': [r['wer_metrics']['wer'] for r in runs_metrics[model_cond]]
+                    'num_samples': runs_metrics[model_name][0]['num_samples'],
+                    'all_runs_wer': [r['wer_metrics']['wer'] for r in runs_metrics[model_name]]
                 }
-                final_results[noise_type][cond_key][model_cond] = aggregated
+                final_results[noise_type][cond_key][model_name] = aggregated
+                
+                print(f"  > Avg WER ({model_name}): {avg_wer:.2f}%")
 
-            # 貢献度の計算（平均WERを使用）
-            avg_vis = final_results[noise_type][cond_key]['with_vision']['wer_metrics']['wer']
-            avg_novis = final_results[noise_type][cond_key]['without_vision']['wer_metrics']['wer']
-            avg_base = final_results[noise_type][cond_key]['baseline']['wer_metrics']['wer']
-            
-            imp_vis = avg_novis - avg_vis
-            imp_base = avg_base - avg_vis
-            
-            final_results[noise_type][cond_key]['contribution'] = {
-                'wer_improvement': imp_vis,
-                'improvement_rate': (imp_vis / avg_novis * 100) if avg_novis > 0 else 0,
-                'wer_improvement_vs_baseline': imp_base,
-                'improvement_rate_vs_baseline': (imp_base / avg_base * 100) if avg_base > 0 else 0,
-                'wer_with_vision': avg_vis,
-                'wer_without_vision': avg_novis,
-                'wer_baseline': avg_base
-            }
-            
-            print(f"  > Avg WER (Vision): {avg_vis:.2f}%")
-            print(f"  > Avg WER (NoVis):  {avg_novis:.2f}%")
-            print(f"  > Avg WER (Base):   {avg_base:.2f}%")
+            # 貢献度の計算（vision/novision/baselineが全て揃っている場合のみ）
+            if all(m in config.eval_models for m in ["vision", "novision", "baseline"]):
+                avg_vis = final_results[noise_type][cond_key]['vision']['wer_metrics']['wer']
+                avg_novis = final_results[noise_type][cond_key]['novision']['wer_metrics']['wer']
+                avg_base = final_results[noise_type][cond_key]['baseline']['wer_metrics']['wer']
+                
+                imp_vis = avg_novis - avg_vis
+                imp_base = avg_base - avg_vis
+                
+                final_results[noise_type][cond_key]['contribution'] = {
+                    'wer_improvement': imp_vis,
+                    'improvement_rate': (imp_vis / avg_novis * 100) if avg_novis > 0 else 0,
+                    'wer_improvement_vs_baseline': imp_base,
+                    'improvement_rate_vs_baseline': (imp_base / avg_base * 100) if avg_base > 0 else 0,
+                    'wer_vision': avg_vis,
+                    'wer_novision': avg_novis,
+                    'wer_baseline': avg_base
+                }
 
     # 最終的なJSONの保存
     json_path = os.path.join(config.results_dir, "comprehensive_results.json")
@@ -507,6 +511,7 @@ def run_comprehensive_test():
     # メタデータ付与
     output_json = {
         '_metadata': {
+            'eval_models': config.eval_models,
             'checkpoint': config.checkpoint_dir,
             'baseline_checkpoint': config.baseline_checkpoint_dir,
             'noise_types': config.noise_types,

@@ -51,7 +51,7 @@ class TrainingConfig:
     audio_trainable_layers: int = 0  # Transformerの上位N層のみ学習（0=全層学習）
     
     # ノイズ設定（統一仕様）
-    noise_type: str = "babble"  # "none", "white", "pink", "babble"
+    noise_type: str = "pink"  # "none", "white", "pink", "babble"
     snr_db: float = 0.0  # 全ノイズタイプ共通のSNR（dB）
     noise_prob: float = 0.5  # ノイズを付加する確率 (0.0-1.0)
     babble_path: str = "../../Datasets/NOISEX92/babble/signal.wav"
@@ -61,7 +61,7 @@ class TrainingConfig:
     amp_dtype: str = "bfloat16"  # "float16" or "bfloat16"
     
     # チェックポイント
-    checkpoint_dir: str = "../../Models/VisionConditionedASRv3/babble"
+    checkpoint_dir: str = "../../Models/VisionConditionedASRv3/pink"
     save_epoch: int = 1
     resume_from: Optional[str] = "../../Models/VisionConditionedASRv3/clear/epoch_10"
     
@@ -72,7 +72,7 @@ class TrainingConfig:
     log_step: int = 100
     validate_epoch: int = 1
     use_wandb: bool = True
-    wandb_project: str = "VisionConditionedASRv3-babble"
+    wandb_project: str = "Prefix-pink"
 
 
 class NoiseAugmenter:

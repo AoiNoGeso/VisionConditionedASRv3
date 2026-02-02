@@ -45,7 +45,7 @@ class TrainingConfig:
     freeze_feature_encoder: bool = True  # CNNベースの特徴抽出器をfreeze
     
     # ノイズ設定（train.py準拠）
-    noise_type: str = "babble"  # "none", "white", "pink", "babble"
+    noise_type: str = "pink"  # "none", "white", "pink", "babble"
     snr_db: float = 0.0  # 全ノイズタイプ共通のSNR（dB）
     noise_prob: float = 0.5  # ノイズを付加する確率 (0.0-1.0)
     babble_path: str = "../../Datasets/NOISEX92/babble/signal.wav"  # babbleノイズのパス
@@ -55,7 +55,7 @@ class TrainingConfig:
     amp_dtype: str = "float16"  # "float16" or "bfloat16"
     
     # 保存設定
-    checkpoint_dir: str = "../../Models/wav2vec2-finetune/babble"
+    checkpoint_dir: str = "../../Models/wav2vec2-finetune/pink"
     save_epoch: int = 1
     resume_from: Optional[str] = "../../Models/wav2vec2-finetune/clear/epoch_10"  # チェックポイントから再開する場合のパス
     
@@ -64,9 +64,9 @@ class TrainingConfig:
     
     # ログ設定
     log_step: int = 50
-    validate_epoch: int = 1
+    validate_epoch: int = 5
     use_wandb: bool = True
-    wandb_project: str = "Wav2Vec2-Finetune-babble"
+    wandb_project: str = "Wav2Vec2-pink"
 
 
 class NoiseAugmenter:
