@@ -21,25 +21,19 @@
     * **`PureWav2Vec2ASR`**: 比較実験用の音声のみのベースラインモデル．
 
 ### 学習
-* **`train.py`**
+* **`train_vasr.py`**
     * 提案モデル（VisionConditionedASRv3）の学習スクリプト．
     * WandBによるログ管理，Mixed Precision (AMP) 学習，ノイズ付加（White/Pink/Babble）に対応しています．
-* **`finetune_noise.py`**
+* **`train_baseline.py`**
     * ベースラインモデル（音声のみ）のファインチューニング用スクリプト．提案手法との公平な比較のために使用します．
 
 ### 評価・テスト
-* **`test.py`**
+* **`test_wer.py`**
     * 提案モデル（画像あり/なし）とベースラインモデルのWER（単語誤り率）を一括で評価・比較するスクリプト．
-* **`new_test.py`**
-    * `test.py` の改良版．評価対象モデル（baseline, vision, novision）を引数で柔軟に選択可能です．
-* **`unrelated_test.py`**
+* **`test_unmatch.py`**
     * 「無関係な画像」を入力した場合と「画像なし（Zero Vision）」の場合を比較し，視覚情報の意味的有用性を検証するスクリプト．
-
-### 分析・ベンチマーク
-* **`attention_analysis.py`**
-    * Transformer内部のAttention重みを抽出し，ノイズレベル（SNR）に応じた視覚情報への依存度（Attention Ratio）を可視化・分析します．
-* **`benchmark_speed.py`**
-    * モデルの推論速度（RTF: Real Time Factor）を計測し，視覚エンコーダ追加によるオーバーヘッドを算出します．
+* **`test_speed.py`**
+    * モデルの推論速度（RTF: Real Time Factor）を計測し，視覚エンコーダ追加によるオーバーヘッドを算出するベンチマークスクリプト．
 
 ## セットアップ
 
