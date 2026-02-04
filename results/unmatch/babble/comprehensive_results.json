@@ -1,0 +1,276 @@
+{
+  "_metadata": {
+    "checkpoint": "../../Models/VisionConditionedASRv3/babble/epoch_15",
+    "epoch": 15,
+    "noise_types": [
+      "none",
+      "babble"
+    ],
+    "snr_values": [
+      -10.0,
+      -5.0,
+      0.0,
+      5.0,
+      10.0
+    ],
+    "num_runs": 3,
+    "dataset_size": 24980,
+    "test_description": "Unrelated vs Zero Vision Test: Comparing unrelated images with zero vision condition"
+  },
+  "none": {
+    "none": {
+      "unrelated": {
+        "wer_metrics": {
+          "wer": 4.34505225313685,
+          "mer": 4.32189990368454,
+          "wil": 7.24245452147331
+        },
+        "num_samples": 24980,
+        "all_runs_wer": [
+          4.36448576623018,
+          4.344924401077026,
+          4.3257465921033456
+        ]
+      },
+      "zerovision": {
+        "wer_metrics": {
+          "wer": 4.513689120045413,
+          "mer": 4.49347247519006,
+          "wil": 7.435538066150525
+        },
+        "num_samples": 24980,
+        "all_runs_wer": [
+          4.513689120045413,
+          4.513689120045413,
+          4.513689120045413
+        ]
+      },
+      "analysis": {
+        "wer_diff_unrelated_vs_zero": -0.16863686690856294,
+        "statistics": {
+          "unrelated_vs_zero": {
+            "mean_diff": -0.16863686690856264,
+            "std_diff": 0.015815460002145565,
+            "t_statistic": -15.07945670033258,
+            "p_value": 0.004368931449710915,
+            "significant_at_0.05": true,
+            "significant_at_0.01": true
+          }
+        },
+        "interpretation": "Semantic Assistance: Unrelated images provide no benefit over zero vision. Vision requires semantic relevance to be useful."
+      }
+    }
+  },
+  "babble": {
+    "babble_snr-10.0": {
+      "unrelated": {
+        "wer_metrics": {
+          "wer": 85.16123423264473,
+          "mer": 78.14347258731581,
+          "wil": 94.2777856757434
+        },
+        "num_samples": 24980,
+        "all_runs_wer": [
+          85.0443774499651,
+          85.28486717449505,
+          85.15445807347403
+        ]
+      },
+      "zerovision": {
+        "wer_metrics": {
+          "wer": 82.18688391288673,
+          "mer": 79.64819463083374,
+          "wil": 94.61562758867632
+        },
+        "num_samples": 24980,
+        "all_runs_wer": [
+          82.09022775565937,
+          82.30195076672881,
+          82.16847321627199
+        ]
+      },
+      "analysis": {
+        "wer_diff_unrelated_vs_zero": 2.9743503197580026,
+        "statistics": {
+          "unrelated_vs_zero": {
+            "mean_diff": 2.9743503197580026,
+            "std_diff": 0.014338823684490656,
+            "t_statistic": 293.3550655204906,
+            "p_value": 1.1619976415313402e-05,
+            "significant_at_0.05": true,
+            "significant_at_0.01": true
+          }
+        },
+        "interpretation": "Negative Transfer: Unrelated images actively harm performance compared to no vision. The model may be misled by incorrect visual context."
+      }
+    },
+    "babble_snr-5.0": {
+      "unrelated": {
+        "wer_metrics": {
+          "wer": 48.038493698171976,
+          "mer": 45.90333177915655,
+          "wil": 67.48824256082408
+        },
+        "num_samples": 24980,
+        "all_runs_wer": [
+          47.97137136676409,
+          48.01548032740355,
+          48.128629400348274
+        ]
+      },
+      "zerovision": {
+        "wer_metrics": {
+          "wer": 46.35097436054792,
+          "mer": 45.26889294033888,
+          "wil": 65.94838154410554
+        },
+        "num_samples": 24980,
+        "all_runs_wer": [
+          46.31249089054074,
+          46.30366909841284,
+          46.436763092690185
+        ]
+      },
+      "analysis": {
+        "wer_diff_unrelated_vs_zero": 1.6875193376240532,
+        "statistics": {
+          "unrelated_vs_zero": {
+            "mean_diff": 1.6875193376240507,
+            "std_diff": 0.021826409973354898,
+            "t_statistic": 109.34059870350579,
+            "p_value": 8.363395206186954e-05,
+            "significant_at_0.05": true,
+            "significant_at_0.01": true
+          }
+        },
+        "interpretation": "Semantic Assistance: Unrelated images provide no benefit over zero vision. Vision requires semantic relevance to be useful."
+      }
+    },
+    "babble_snr0.0": {
+      "unrelated": {
+        "wer_metrics": {
+          "wer": 19.321003280683858,
+          "mer": 19.03176100053878,
+          "wil": 31.538610867622477
+        },
+        "num_samples": 24980,
+        "all_runs_wer": [
+          19.28136914213825,
+          19.28443759157404,
+          19.397203108339276
+        ]
+      },
+      "zerovision": {
+        "wer_metrics": {
+          "wer": 18.725724090140815,
+          "mer": 18.534274727253734,
+          "wil": 30.260388568367375
+        },
+        "num_samples": 24980,
+        "all_runs_wer": [
+          18.737102923465198,
+          18.641213878596798,
+          18.79885546836045
+        ]
+      },
+      "analysis": {
+        "wer_diff_unrelated_vs_zero": 0.5952791905430423,
+        "statistics": {
+          "unrelated_vs_zero": {
+            "mean_diff": 0.59527919054304,
+            "std_diff": 0.0404574505391856,
+            "t_statistic": 20.80832809395783,
+            "p_value": 0.0023015704383281647,
+            "significant_at_0.05": true,
+            "significant_at_0.01": true
+          }
+        },
+        "interpretation": "Semantic Assistance: Unrelated images provide no benefit over zero vision. Vision requires semantic relevance to be useful."
+      }
+    },
+    "babble_snr5.0": {
+      "unrelated": {
+        "wer_metrics": {
+          "wer": 9.79052718518348,
+          "mer": 9.711891691633198,
+          "wil": 16.49576228434398
+        },
+        "num_samples": 24980,
+        "all_runs_wer": [
+          9.781066132756465,
+          9.771860784449098,
+          9.818654638344878
+        ]
+      },
+      "zerovision": {
+        "wer_metrics": {
+          "wer": 9.612684969967551,
+          "mer": 9.552232914774859,
+          "wil": 15.971724600474431
+        },
+        "num_samples": 24980,
+        "all_runs_wer": [
+          9.618438312659656,
+          9.596192054250185,
+          9.623424542992812
+        ]
+      },
+      "analysis": {
+        "wer_diff_unrelated_vs_zero": 0.1778422152159287,
+        "statistics": {
+          "unrelated_vs_zero": {
+            "mean_diff": 0.17784221521592927,
+            "std_diff": 0.013398261474143826,
+            "t_statistic": 18.771605047879074,
+            "p_value": 0.002825876962004026,
+            "significant_at_0.05": true,
+            "significant_at_0.01": true
+          }
+        },
+        "interpretation": "Semantic Assistance: Unrelated images provide no benefit over zero vision. Vision requires semantic relevance to be useful."
+      }
+    },
+    "babble_snr10.0": {
+      "unrelated": {
+        "wer_metrics": {
+          "wer": 6.763118260598297,
+          "mer": 6.7203098504529395,
+          "wil": 11.40648738825386
+        },
+        "num_samples": 24980,
+        "all_runs_wer": [
+          6.728342500326024,
+          6.747903865479177,
+          6.8131084159896895
+        ]
+      },
+      "zerovision": {
+        "wer_metrics": {
+          "wer": 6.730899541522514,
+          "mer": 6.695876867054334,
+          "wil": 11.194339153438774
+        },
+        "num_samples": 24980,
+        "all_runs_wer": [
+          6.720287820557077,
+          6.711466028429185,
+          6.7609447755812795
+        ]
+      },
+      "analysis": {
+        "wer_diff_unrelated_vs_zero": 0.03221871907578322,
+        "statistics": {
+          "unrelated_vs_zero": {
+            "mean_diff": 0.03221871907578292,
+            "std_diff": 0.01825286862447761,
+            "t_statistic": 2.496273348407173,
+            "p_value": 0.12992678795352278,
+            "significant_at_0.05": false,
+            "significant_at_0.01": false
+          }
+        },
+        "interpretation": "Semantic Assistance: Unrelated images provide no benefit over zero vision. Vision requires semantic relevance to be useful."
+      }
+    }
+  }
+}

@@ -1,0 +1,63 @@
+{
+  "_metadata": {
+    "checkpoint": "../../Models/VisionConditionedASRv3/pink/epoch_15",
+    "epoch": 15,
+    "noise_types": [
+      "none"
+    ],
+    "snr_values": [
+      -10.0,
+      -5.0,
+      0.0,
+      5.0,
+      10.0
+    ],
+    "num_runs": 3,
+    "dataset_size": 24980,
+    "test_description": "Unrelated vs Zero Vision Test: Comparing unrelated images with zero vision condition"
+  },
+  "none": {
+    "none": {
+      "unrelated": {
+        "wer_metrics": {
+          "wer": 4.24865180002915,
+          "mer": 4.227297929134605,
+          "wil": 7.065157684280128
+        },
+        "num_samples": 24980,
+        "all_runs_wer": [
+          4.25824070451599,
+          4.242898457337046,
+          4.244816238234414
+        ]
+      },
+      "zerovision": {
+        "wer_metrics": {
+          "wer": 4.427005423484378,
+          "mer": 4.407698770335293,
+          "wil": 7.276487264810915
+        },
+        "num_samples": 24980,
+        "all_runs_wer": [
+          4.427005423484378,
+          4.427005423484378,
+          4.427005423484378
+        ]
+      },
+      "analysis": {
+        "wer_diff_unrelated_vs_zero": -0.17835362345522743,
+        "statistics": {
+          "unrelated_vs_zero": {
+            "mean_diff": -0.17835362345522773,
+            "std_diff": 0.00682543223714987,
+            "t_statistic": -36.954452762114336,
+            "p_value": 0.000731458587604882,
+            "significant_at_0.05": true,
+            "significant_at_0.01": true
+          }
+        },
+        "interpretation": "Semantic Assistance: Unrelated images provide no benefit over zero vision. Vision requires semantic relevance to be useful."
+      }
+    }
+  }
+}

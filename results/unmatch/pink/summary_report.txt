@@ -1,0 +1,48 @@
+================================================================================
+UNRELATED vs ZERO VISION TEST - SUMMARY REPORT
+================================================================================
+
+Model Checkpoint: ../../Models/VisionConditionedASRv3/pink/epoch_15
+Epoch: 15
+Number of Runs: 3
+Test Purpose: Compare unrelated images vs zero vision
+
+================================================================================
+RESULTS BY CONDITION
+================================================================================
+
+
+────────────────────────────────────────────────────────────────────────────────
+Noise Type: NONE
+────────────────────────────────────────────────────────────────────────────────
+
+  Condition: none
+  ----------------------------------------------------------------------------
+    Unrelated   : WER =   4.25%
+    Zerovision  : WER =   4.43%
+
+  WER Difference:
+    Unrelated - Zero:  -0.18%
+
+  Statistical Significance (p-value):
+    Unrelated vs Zero: p = 0.0007 (*)
+
+  Interpretation:
+    Semantic Assistance: Unrelated images provide no benefit over zero vision. Vision requires semantic relevance to be useful.
+
+================================================================================
+OVERALL CONCLUSION
+================================================================================
+
+Across all 1 test conditions:
+  - Semantic Assistance patterns: 1
+  - Regularization patterns: 0
+  - Negative Transfer patterns: 0
+  - Other/Inconclusive: 0
+
+→ Vision primarily provides SEMANTIC ASSISTANCE.
+  Unrelated images do not help (similar to no vision).
+
+================================================================================
+* p < 0.05, ** p < 0.01
+================================================================================

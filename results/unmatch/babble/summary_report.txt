@@ -1,0 +1,122 @@
+================================================================================
+UNRELATED vs ZERO VISION TEST - SUMMARY REPORT
+================================================================================
+
+Model Checkpoint: ../../Models/VisionConditionedASRv3/babble/epoch_15
+Epoch: 15
+Number of Runs: 3
+Test Purpose: Compare unrelated images vs zero vision
+
+================================================================================
+RESULTS BY CONDITION
+================================================================================
+
+
+────────────────────────────────────────────────────────────────────────────────
+Noise Type: BABBLE
+────────────────────────────────────────────────────────────────────────────────
+
+  Condition: babble_snr-10.0
+  ----------------------------------------------------------------------------
+    Unrelated   : WER =  85.16%
+    Zerovision  : WER =  82.19%
+
+  WER Difference:
+    Unrelated - Zero:  +2.97%
+
+  Statistical Significance (p-value):
+    Unrelated vs Zero: p = 0.0000 (*)
+
+  Interpretation:
+    Negative Transfer: Unrelated images actively harm performance compared to no vision. The model may be misled by incorrect visual context.
+
+  Condition: babble_snr-5.0
+  ----------------------------------------------------------------------------
+    Unrelated   : WER =  48.04%
+    Zerovision  : WER =  46.35%
+
+  WER Difference:
+    Unrelated - Zero:  +1.69%
+
+  Statistical Significance (p-value):
+    Unrelated vs Zero: p = 0.0001 (*)
+
+  Interpretation:
+    Semantic Assistance: Unrelated images provide no benefit over zero vision. Vision requires semantic relevance to be useful.
+
+  Condition: babble_snr0.0
+  ----------------------------------------------------------------------------
+    Unrelated   : WER =  19.32%
+    Zerovision  : WER =  18.73%
+
+  WER Difference:
+    Unrelated - Zero:  +0.60%
+
+  Statistical Significance (p-value):
+    Unrelated vs Zero: p = 0.0023 (*)
+
+  Interpretation:
+    Semantic Assistance: Unrelated images provide no benefit over zero vision. Vision requires semantic relevance to be useful.
+
+  Condition: babble_snr10.0
+  ----------------------------------------------------------------------------
+    Unrelated   : WER =   6.76%
+    Zerovision  : WER =   6.73%
+
+  WER Difference:
+    Unrelated - Zero:  +0.03%
+
+  Statistical Significance (p-value):
+    Unrelated vs Zero: p = 0.1299 (n.s.)
+
+  Interpretation:
+    Semantic Assistance: Unrelated images provide no benefit over zero vision. Vision requires semantic relevance to be useful.
+
+  Condition: babble_snr5.0
+  ----------------------------------------------------------------------------
+    Unrelated   : WER =   9.79%
+    Zerovision  : WER =   9.61%
+
+  WER Difference:
+    Unrelated - Zero:  +0.18%
+
+  Statistical Significance (p-value):
+    Unrelated vs Zero: p = 0.0028 (*)
+
+  Interpretation:
+    Semantic Assistance: Unrelated images provide no benefit over zero vision. Vision requires semantic relevance to be useful.
+
+────────────────────────────────────────────────────────────────────────────────
+Noise Type: NONE
+────────────────────────────────────────────────────────────────────────────────
+
+  Condition: none
+  ----------------------------------------------------------------------------
+    Unrelated   : WER =   4.35%
+    Zerovision  : WER =   4.51%
+
+  WER Difference:
+    Unrelated - Zero:  -0.17%
+
+  Statistical Significance (p-value):
+    Unrelated vs Zero: p = 0.0044 (*)
+
+  Interpretation:
+    Semantic Assistance: Unrelated images provide no benefit over zero vision. Vision requires semantic relevance to be useful.
+
+================================================================================
+OVERALL CONCLUSION
+================================================================================
+
+Across all 6 test conditions:
+  - Semantic Assistance patterns: 5
+  - Regularization patterns: 0
+  - Negative Transfer patterns: 1
+  - Other/Inconclusive: 0
+
+→ Vision primarily provides SEMANTIC ASSISTANCE.
+  Unrelated images do not help (similar to no vision).
+
+================================================================================
+* p < 0.05, ** p < 0.01
+================================================================================

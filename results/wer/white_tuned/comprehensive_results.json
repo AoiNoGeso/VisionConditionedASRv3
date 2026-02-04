@@ -1,0 +1,98 @@
+{
+  "_metadata": {
+    "eval_models": [
+      "vision"
+    ],
+    "checkpoint": "../../Models/VisionConditionedASRv3/white/epoch_15",
+    "baseline_checkpoint": "../../Models/wav2vec2-finetune/white/epoch_15",
+    "noise_types": [
+      "babble"
+    ],
+    "snr_values": [
+      -10.0,
+      -5.0,
+      0.0,
+      5.0,
+      10.0
+    ],
+    "num_runs": 3,
+    "dataset_size": 24980
+  },
+  "babble": {
+    "babble_snr-10.0": {
+      "vision": {
+        "wer_metrics": {
+          "wer": 97.30845843657387,
+          "mer": 87.42018936168165,
+          "wil": 98.02593768364966
+        },
+        "num_samples": 24980,
+        "all_runs_wer": [
+          97.32239431109475,
+          97.23379283363634,
+          97.36918816499053
+        ]
+      }
+    },
+    "babble_snr-5.0": {
+      "vision": {
+        "wer_metrics": {
+          "wer": 75.30524679283108,
+          "mer": 68.2889211528446,
+          "wil": 87.96170501699196
+        },
+        "num_samples": 24980,
+        "all_runs_wer": [
+          75.42440491258755,
+          75.19733965433917,
+          75.29399581156652
+        ]
+      }
+    },
+    "babble_snr0.0": {
+      "vision": {
+        "wer_metrics": {
+          "wer": 35.9526384829586,
+          "mer": 34.10287647049179,
+          "wil": 52.30487231061597
+        },
+        "num_samples": 24980,
+        "all_runs_wer": [
+          36.092252932286996,
+          36.000199449213326,
+          35.76546306737548
+        ]
+      }
+    },
+    "babble_snr5.0": {
+      "vision": {
+        "wer_metrics": {
+          "wer": 14.199889024412073,
+          "mer": 13.900878988221875,
+          "wil": 22.91500552536404
+        },
+        "num_samples": 24980,
+        "all_runs_wer": [
+          14.120620747320862,
+          14.259468084290305,
+          14.21957824162505
+        ]
+      }
+    },
+    "babble_snr10.0": {
+      "vision": {
+        "wer_metrics": {
+          "wer": 7.426542599027813,
+          "mer": 7.346301729442385,
+          "wil": 12.288778768071206
+        },
+        "num_samples": 24980,
+        "all_runs_wer": [
+          7.3554568537653715,
+          7.511947774990603,
+          7.412223168327466
+        ]
+      }
+    }
+  }
+}

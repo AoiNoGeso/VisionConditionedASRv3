@@ -1,0 +1,37 @@
+======================================================================
+Speed Benchmark Results
+======================================================================
+
+Configuration:
+  Device: cuda:1
+  Batch size: 1
+  Number of samples: 100
+
+
+Wav2Vec2 Results:
+----------------------------------------------------------------------
+  Samples:              100
+  Total audio duration: 452.04s
+  Total inference time: 1.88s
+  Avg audio duration:   4.520s
+  Avg inference time:   0.019s
+  RTF:                  0.0042
+
+VASR Results:
+----------------------------------------------------------------------
+  Samples:              100
+  Total audio duration: 452.04s
+  Total inference time: 3.32s
+  Avg audio duration:   4.520s
+  Avg inference time:   0.033s
+  RTF:                  0.0073
+
+  Component Breakdown:
+    Vision Encoder:       1.94s (58.4%)
+    Audio Encoder:        0.36s (10.8%)
+    Transformer Encoder:  1.02s (30.7%)
+
+======================================================================
+Comparison:
+  VASR is 1.77x slower than Wav2Vec2
+======================================================================

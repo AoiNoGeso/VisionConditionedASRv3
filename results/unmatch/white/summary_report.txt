@@ -1,0 +1,252 @@
+================================================================================
+UNRELATED vs ZERO VISION TEST - SUMMARY REPORT
+================================================================================
+
+Model Checkpoint: ../../Models/VisionConditionedASRv3/white/epoch_15
+Epoch: 15
+Number of Runs: 3
+Test Purpose: Compare unrelated images vs zero vision
+
+================================================================================
+RESULTS BY CONDITION
+================================================================================
+
+
+────────────────────────────────────────────────────────────────────────────────
+Noise Type: BABBLE
+────────────────────────────────────────────────────────────────────────────────
+
+  Condition: babble_snr-10.0
+  ----------------------------------------------------------------------------
+    Unrelated   : WER =  98.87%
+    Zerovision  : WER =  94.45%
+
+  WER Difference:
+    Unrelated - Zero:  +4.42%
+
+  Statistical Significance (p-value):
+    Unrelated vs Zero: p = 0.0001 (*)
+
+  Interpretation:
+    Negative Transfer: Unrelated images actively harm performance compared to no vision. The model may be misled by incorrect visual context.
+
+  Condition: babble_snr-5.0
+  ----------------------------------------------------------------------------
+    Unrelated   : WER =  80.16%
+    Zerovision  : WER =  77.22%
+
+  WER Difference:
+    Unrelated - Zero:  +2.94%
+
+  Statistical Significance (p-value):
+    Unrelated vs Zero: p = 0.0004 (*)
+
+  Interpretation:
+    Negative Transfer: Unrelated images actively harm performance compared to no vision. The model may be misled by incorrect visual context.
+
+  Condition: babble_snr0.0
+  ----------------------------------------------------------------------------
+    Unrelated   : WER =  41.09%
+    Zerovision  : WER =  39.59%
+
+  WER Difference:
+    Unrelated - Zero:  +1.50%
+
+  Statistical Significance (p-value):
+    Unrelated vs Zero: p = 0.0004 (*)
+
+  Interpretation:
+    Semantic Assistance: Unrelated images provide no benefit over zero vision. Vision requires semantic relevance to be useful.
+
+  Condition: babble_snr10.0
+  ----------------------------------------------------------------------------
+    Unrelated   : WER =   8.57%
+    Zerovision  : WER =   8.33%
+
+  WER Difference:
+    Unrelated - Zero:  +0.24%
+
+  Statistical Significance (p-value):
+    Unrelated vs Zero: p = 0.0020 (*)
+
+  Interpretation:
+    Semantic Assistance: Unrelated images provide no benefit over zero vision. Vision requires semantic relevance to be useful.
+
+  Condition: babble_snr5.0
+  ----------------------------------------------------------------------------
+    Unrelated   : WER =  16.73%
+    Zerovision  : WER =  16.06%
+
+  WER Difference:
+    Unrelated - Zero:  +0.68%
+
+  Statistical Significance (p-value):
+    Unrelated vs Zero: p = 0.0034 (*)
+
+  Interpretation:
+    Semantic Assistance: Unrelated images provide no benefit over zero vision. Vision requires semantic relevance to be useful.
+
+────────────────────────────────────────────────────────────────────────────────
+Noise Type: PINK
+────────────────────────────────────────────────────────────────────────────────
+
+  Condition: pink_snr-10.0
+  ----------------------------------------------------------------------------
+    Unrelated   : WER =  70.60%
+    Zerovision  : WER =  64.35%
+
+  WER Difference:
+    Unrelated - Zero:  +6.25%
+
+  Statistical Significance (p-value):
+    Unrelated vs Zero: p = 0.0000 (*)
+
+  Interpretation:
+    Negative Transfer: Unrelated images actively harm performance compared to no vision. The model may be misled by incorrect visual context.
+
+  Condition: pink_snr-5.0
+  ----------------------------------------------------------------------------
+    Unrelated   : WER =  31.75%
+    Zerovision  : WER =  28.86%
+
+  WER Difference:
+    Unrelated - Zero:  +2.89%
+
+  Statistical Significance (p-value):
+    Unrelated vs Zero: p = 0.0004 (*)
+
+  Interpretation:
+    Negative Transfer: Unrelated images actively harm performance compared to no vision. The model may be misled by incorrect visual context.
+
+  Condition: pink_snr0.0
+  ----------------------------------------------------------------------------
+    Unrelated   : WER =  13.50%
+    Zerovision  : WER =  12.80%
+
+  WER Difference:
+    Unrelated - Zero:  +0.70%
+
+  Statistical Significance (p-value):
+    Unrelated vs Zero: p = 0.0029 (*)
+
+  Interpretation:
+    Semantic Assistance: Unrelated images provide no benefit over zero vision. Vision requires semantic relevance to be useful.
+
+  Condition: pink_snr10.0
+  ----------------------------------------------------------------------------
+    Unrelated   : WER =   6.20%
+    Zerovision  : WER =   6.25%
+
+  WER Difference:
+    Unrelated - Zero:  -0.05%
+
+  Statistical Significance (p-value):
+    Unrelated vs Zero: p = 0.0653 (n.s.)
+
+  Interpretation:
+    Semantic Assistance: Unrelated images provide no benefit over zero vision. Vision requires semantic relevance to be useful.
+
+  Condition: pink_snr5.0
+  ----------------------------------------------------------------------------
+    Unrelated   : WER =   8.11%
+    Zerovision  : WER =   7.93%
+
+  WER Difference:
+    Unrelated - Zero:  +0.18%
+
+  Statistical Significance (p-value):
+    Unrelated vs Zero: p = 0.0069 (*)
+
+  Interpretation:
+    Semantic Assistance: Unrelated images provide no benefit over zero vision. Vision requires semantic relevance to be useful.
+
+────────────────────────────────────────────────────────────────────────────────
+Noise Type: WHITE
+────────────────────────────────────────────────────────────────────────────────
+
+  Condition: white_snr-10.0
+  ----------------------------------------------------------------------------
+    Unrelated   : WER =  65.89%
+    Zerovision  : WER =  63.12%
+
+  WER Difference:
+    Unrelated - Zero:  +2.77%
+
+  Statistical Significance (p-value):
+    Unrelated vs Zero: p = 0.0000 (*)
+
+  Interpretation:
+    Negative Transfer: Unrelated images actively harm performance compared to no vision. The model may be misled by incorrect visual context.
+
+  Condition: white_snr-5.0
+  ----------------------------------------------------------------------------
+    Unrelated   : WER =  32.80%
+    Zerovision  : WER =  30.39%
+
+  WER Difference:
+    Unrelated - Zero:  +2.41%
+
+  Statistical Significance (p-value):
+    Unrelated vs Zero: p = 0.0010 (*)
+
+  Interpretation:
+    Negative Transfer: Unrelated images actively harm performance compared to no vision. The model may be misled by incorrect visual context.
+
+  Condition: white_snr0.0
+  ----------------------------------------------------------------------------
+    Unrelated   : WER =  15.82%
+    Zerovision  : WER =  14.89%
+
+  WER Difference:
+    Unrelated - Zero:  +0.93%
+
+  Statistical Significance (p-value):
+    Unrelated vs Zero: p = 0.0001 (*)
+
+  Interpretation:
+    Semantic Assistance: Unrelated images provide no benefit over zero vision. Vision requires semantic relevance to be useful.
+
+  Condition: white_snr10.0
+  ----------------------------------------------------------------------------
+    Unrelated   : WER =   7.38%
+    Zerovision  : WER =   7.51%
+
+  WER Difference:
+    Unrelated - Zero:  -0.13%
+
+  Statistical Significance (p-value):
+    Unrelated vs Zero: p = 0.0276 (*)
+
+  Interpretation:
+    Semantic Assistance: Unrelated images provide no benefit over zero vision. Vision requires semantic relevance to be useful.
+
+  Condition: white_snr5.0
+  ----------------------------------------------------------------------------
+    Unrelated   : WER =   9.89%
+    Zerovision  : WER =   9.68%
+
+  WER Difference:
+    Unrelated - Zero:  +0.21%
+
+  Statistical Significance (p-value):
+    Unrelated vs Zero: p = 0.0145 (*)
+
+  Interpretation:
+    Semantic Assistance: Unrelated images provide no benefit over zero vision. Vision requires semantic relevance to be useful.
+
+================================================================================
+OVERALL CONCLUSION
+================================================================================
+
+Across all 15 test conditions:
+  - Semantic Assistance patterns: 9
+  - Regularization patterns: 0
+  - Negative Transfer patterns: 6
+  - Other/Inconclusive: 0
+
+→ Vision primarily provides SEMANTIC ASSISTANCE.
+  Unrelated images do not help (similar to no vision).
+
+================================================================================
+* p < 0.05, ** p < 0.01
+================================================================================
