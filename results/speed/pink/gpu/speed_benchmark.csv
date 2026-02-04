@@ -1,3 +1,0 @@
-Model,Samples,Total Audio (s),Total Inference (s),Avg Audio (s),Avg Inference (s),RTF
-Wav2Vec2,100,452.04,1.88,4.520,0.019,0.0042
-VASR,100,452.04,3.32,4.520,0.033,0.0073
