@@ -436,6 +436,7 @@ class SpeedBenchmark:
 
 def main():
     """メイン実行関数"""
+    torch.set_num_threads(12)
     config = BenchmarkConfig()
     
     benchmark = SpeedBenchmark(config)
